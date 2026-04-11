@@ -51,67 +51,140 @@ def resolve_outcome(
     Mirrors the logic in HistoryService._evaluate_snapshot but operates
     entirely in-memory — no API calls needed.
 
+    Exit priority (checked before hard SL/TP each bar):
+      1. Momentum failure  — entry_momentum (close-to-close) flips against trade
+      2. Time stop         — bars_in_trade >= 12 with no open profit
+      3. Soft stop         — unrealized PnL <= -2.5%
+      4. Breakeven stop    — once +1% floated, floor/ceil stop to entry
+      5. Hard stop / target (existing logic, unchanged)
+
     Args:
         trade: The trade to resolve (mutated in-place and returned).
         forward_candles: Candles starting at or after the entry bar.
         evaluation_window: Max bars to scan before falling back to close PnL.
 
     Returns:
-        The same trade object with outcome, mfe_pct, mae_pct, pnl_pct set.
+        The same trade object with outcome, exit_reason, mfe_pct, mae_pct,
+        pnl_pct set.
     """
     candles = forward_candles[:evaluation_window]
     if not candles:
         trade.outcome = EvaluationOutcome.NEITHER.value
+        trade.exit_reason = "neither"
         return trade
 
     entry = trade.entry
     target = trade.target
-    stop = trade.stop
+    stop = trade.stop          # may be adjusted intra-loop (breakeven)
     side = trade.side
 
     outcome = EvaluationOutcome.NEITHER.value
+    exit_reason = ""
+    exit_price: float | None = None
 
-    if side == "long":
-        mfe = max(((c.high - entry) / entry) * 100.0 for c in candles)
-        mae = max(((entry - c.low) / entry) * 100.0 for c in candles)
-        for candle in candles:
+    mfe_running = 0.0
+    mae_running = 0.0
+
+    prev_close = entry  # seed for momentum calculation
+
+    for bars_in_trade, candle in enumerate(candles, start=1):
+        # ── Running MFE / MAE ────────────────────────────────────────────────
+        if side == "long":
+            bar_mfe = ((candle.high - entry) / entry) * 100.0
+            bar_mae = ((entry - candle.low) / entry) * 100.0
+            unrealized_pnl = ((candle.close - entry) / entry) * 100.0
+        else:
+            bar_mfe = ((entry - candle.low) / entry) * 100.0
+            bar_mae = ((candle.high - entry) / entry) * 100.0
+            unrealized_pnl = ((entry - candle.close) / entry) * 100.0
+
+        mfe_running = max(mfe_running, bar_mfe)
+        mae_running = max(mae_running, bar_mae)
+
+        # ── 1. Momentum failure (VERY conservative) ─────────────
+        entry_momentum = (candle.close - entry) / max(entry, 1e-9)
+
+        if bars_in_trade >= 5:
+            if side == "long" and entry_momentum < -0.008:
+                outcome = "momentum_failure"
+                exit_reason = "momentum_failure"
+                exit_price = candle.close
+                break
+            if side == "short" and entry_momentum > 0.008:
+                outcome = "momentum_failure"
+                exit_reason = "momentum_failure"
+                exit_price = candle.close
+                break
+
+        # ── 2. Time-based exit (give trade time) ────────────────
+        if bars_in_trade >= 30 and unrealized_pnl <= 0:
+            outcome = "time_stop"
+            exit_reason = "time_stop"
+            exit_price = candle.close
+            break
+
+        # ── 3. Breakeven (disabled for now) ───────────────────────────
+        # if unrealized_pnl >= 1.5:
+        #     if side == "long":
+        #         stop = max(stop, entry)
+        #     else:
+        #         stop = min(stop, entry)
+
+        # ── 3. Soft stop (only real losers) ────────────────────
+        if bars_in_trade >= 5 and unrealized_pnl <= -6.0:
+            outcome = "soft_stop"
+            exit_reason = "soft_stop"
+            exit_price = candle.close
+            break
+
+        # ── 5. Hard stop / target (existing logic, unchanged) ────────────────
+        if side == "long":
             hit_target = candle.high >= target
             hit_stop = candle.low <= stop
-            if hit_target and hit_stop:
-                outcome = EvaluationOutcome.AMBIGUOUS_SAME_BAR.value
-                break
-            if hit_target:
-                outcome = EvaluationOutcome.TARGET_HIT.value
-                break
-            if hit_stop:
-                outcome = EvaluationOutcome.STOP_HIT.value
-                break
-        pnl = ((candles[-1].close - entry) / entry) * 100.0
-    else:
-        mfe = max(((entry - c.low) / entry) * 100.0 for c in candles)
-        mae = max(((c.high - entry) / entry) * 100.0 for c in candles)
-        for candle in candles:
+        else:
             hit_target = candle.low <= target
             hit_stop = candle.high >= stop
-            if hit_target and hit_stop:
-                outcome = EvaluationOutcome.AMBIGUOUS_SAME_BAR.value
-                break
-            if hit_target:
-                outcome = EvaluationOutcome.TARGET_HIT.value
-                break
-            if hit_stop:
-                outcome = EvaluationOutcome.STOP_HIT.value
-                break
-        pnl = ((entry - candles[-1].close) / entry) * 100.0
 
-    # For clean target/stop hits use the actual price, not close
-    if outcome == EvaluationOutcome.TARGET_HIT.value:
+        if hit_target and hit_stop:
+            outcome = EvaluationOutcome.AMBIGUOUS_SAME_BAR.value
+            exit_reason = "ambiguous_same_bar"
+            break
+        if hit_target:
+            outcome = EvaluationOutcome.TARGET_HIT.value
+            exit_reason = "target_hit"
+            exit_price = target
+            break
+        if hit_stop:
+            outcome = EvaluationOutcome.STOP_HIT.value
+            exit_reason = "stop_hit"
+            exit_price = stop
+            break
+
+        prev_close = candle.close
+
+    # ── PnL resolution ───────────────────────────────────────────────────────
+    if exit_price is not None:
+        if side == "long":
+            pnl = ((exit_price - entry) / entry) * 100.0
+        else:
+            pnl = ((entry - exit_price) / entry) * 100.0
+    elif outcome == EvaluationOutcome.TARGET_HIT.value:
         pnl = abs((target - entry) / entry) * 100.0
     elif outcome == EvaluationOutcome.STOP_HIT.value:
         pnl = -abs((entry - stop) / entry) * 100.0
+    else:
+        # NEITHER / window exhausted — use final close
+        last_close = candles[-1].close
+        if side == "long":
+            pnl = ((last_close - entry) / entry) * 100.0
+        else:
+            pnl = ((entry - last_close) / entry) * 100.0
+        if not exit_reason:
+            exit_reason = "neither"
 
     trade.outcome = outcome
-    trade.mfe_pct = round(mfe, 4)
-    trade.mae_pct = round(mae, 4)
+    trade.exit_reason = exit_reason
+    trade.mfe_pct = round(mfe_running, 4)
+    trade.mae_pct = round(mae_running, 4)
     trade.pnl_pct = round(pnl, 4)
     return trade

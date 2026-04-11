@@ -1794,12 +1794,14 @@ class SetupAnalyzer:
         self.style = style
         self.market_mode = market_mode
         self._filter_overrides: dict[str, float] = filter_overrides or {}
+        # Resolve config once at construction — avoids repeated imports and
+        # lru_cache lookups inside hot paths (_mode_params / _trade_filter_params).
+        from futures_analyzer.config import load_app_config
+        self._config = load_app_config()
 
     def _mode_params(self) -> dict[str, float]:
-        from futures_analyzer.config import load_app_config
-        config = load_app_config()
-        tuning = config.style_tuning(self.style)
-        mode_settings = config.market_mode_settings(self.market_mode)
+        tuning = self._config.style_tuning(self.style)
+        mode_settings = self._config.market_mode_settings(self.market_mode)
         return {
             "fallback_risk_reward": tuning.fallback_risk_reward,
             "target_cap_atr_mult": (
@@ -1813,36 +1815,34 @@ class SetupAnalyzer:
         }
 
     def _trade_filter_params(self) -> dict[str, float]:
-        from futures_analyzer.config import load_app_config
-        config = load_app_config()
-        tuning = config.style_tuning(self.style)
-        mode_settings = config.market_mode_settings(self.market_mode)
-        params = {
-            "min_confidence": (
-                mode_settings.min_confidence
-                if mode_settings.min_confidence is not None
-                else tuning.min_confidence
-            ),
+        tuning = self._config.style_tuning(self.style)
+        mode_settings = self._config.market_mode_settings(self.market_mode)
+
+        # Priority: market_mode < style < filter_overrides (runtime)
+        # market_mode contributes only fields it explicitly sets (non-None).
+        # style (tuning) always has values for every field and overrides market_mode.
+        # filter_overrides are runtime caller overrides and win above all.
+        mode_params: dict[str, float] = {
+            k: v for k, v in {
+                "min_confidence": mode_settings.min_confidence,
+                "max_stop_distance_pct": mode_settings.max_stop_distance_pct,
+                "min_evidence_agreement": mode_settings.min_evidence_agreement,
+                "min_evidence_edge": mode_settings.min_evidence_edge,
+            }.items() if v is not None
+        }
+
+        style_params: dict[str, float] = {
+            "min_confidence": tuning.min_confidence,
             "max_confidence": tuning.max_confidence,
             "min_quality": tuning.min_quality,
             "min_rr_ratio": tuning.min_rr_ratio,
-            "max_stop_distance_pct": (
-                mode_settings.max_stop_distance_pct
-                if mode_settings.max_stop_distance_pct is not None
-                else tuning.max_stop_distance_pct
-            ),
-            "min_evidence_agreement": (
-                mode_settings.min_evidence_agreement
-                if mode_settings.min_evidence_agreement is not None
-                else tuning.min_evidence_agreement
-            ),
-            "min_evidence_edge": (
-                mode_settings.min_evidence_edge
-                if mode_settings.min_evidence_edge is not None
-                else tuning.min_evidence_edge
-            ),
+            "max_stop_distance_pct": tuning.max_stop_distance_pct,
+            "min_evidence_agreement": tuning.min_evidence_agreement,
+            "min_evidence_edge": tuning.min_evidence_edge,
         }
-        params.update(self._filter_overrides)
+
+        # style_params last → style always overrides market_mode
+        params = {**mode_params, **style_params, **self._filter_overrides}
         return params
 
     def _trade_filter_reasons(
@@ -1913,10 +1913,18 @@ class SetupAnalyzer:
         setup.evidence_agreement = evidence.agreement
         setup.evidence_total = evidence.total
         setup.deliberation_summary = evidence.summary
-        if evidence.agreement < params["min_evidence_agreement"]:
-            setup.tradable_reasons.append(
-                f"evidence agreement {evidence.agreement}/{evidence.total} is below {params['min_evidence_agreement']}"
-            )
+
+        # EVIDENCE FILTER (regime-aware)
+        if regime == MarketRegime.RANGE:
+            if evidence.agreement < 2:
+                setup.tradable_reasons.append(
+                    f"evidence agreement {evidence.agreement}/{evidence.total} is below 2 (range)"
+                )
+        else:
+            if evidence.agreement < params["min_evidence_agreement"]:
+                setup.tradable_reasons.append(
+                    f"evidence agreement {evidence.agreement}/{evidence.total} is below {params['min_evidence_agreement']}"
+                )
         if (evidence.agreement - opposing_evidence.agreement) < params["min_evidence_edge"]:
             setup.tradable_reasons.append(
                 f"evidence edge over opposing side is only {evidence.agreement - opposing_evidence.agreement}"
@@ -1947,15 +1955,24 @@ class SetupAnalyzer:
                 setup.tradable_reasons.append(
                     f"volatile chop requires {chop_min}+ evidence signals, got {evidence.agreement}"
                 )
+
         if regime == MarketRegime.RANGE:
             setup.quality_score = min(setup.quality_score, 52.0)
             setup.quality_label = _quality_label(setup.quality_score)
-            # Range needs at least 3 signals — below that it's a coin flip
-            range_min = max(params["min_evidence_agreement"], 3)
+
+            # Range needs at least 2 signals
+            range_min = 2
             if evidence.agreement < range_min:
                 setup.tradable_reasons.append(
                     f"range regime requires {range_min}+ evidence signals, got {evidence.agreement}"
                 )
+
+            # RANGE: enforce only relaxed threshold (no overrides here)
+            if setup.quality_score < 45:
+                setup.tradable_reasons.append(
+                    f"quality {setup.quality_score:.1f} below threshold (range)"
+                )
+
         setup.is_tradable = not setup.tradable_reasons
         setup.leverage_suggestion = _leverage_suggestion(
             stop_distance_pct=setup.stop_distance_pct,
@@ -2717,14 +2734,62 @@ class SetupAnalyzer:
         else:
             quality_score = min(raw_quality_score, _quality_score_cap_from_confidence(confidence))
             quality_label = _quality_label(quality_score)
-        tradable_reasons = self._trade_filter_reasons(
-            confidence=confidence,
-            quality_score=quality_score,
-            risk_reward_ratio=rr_ratio,
-            stop_distance_pct=stop_distance_pct,
-            regime=regime,
-        )
-        is_tradable = not tradable_reasons
+        # ── Primary trade filter ─────────────────────────────────────────────
+        # Centralised gate evaluated BEFORE _SideMetrics is constructed.
+        # Downstream reversal penalties may append further reasons and
+        # re-evaluate is_tradable via _apply_reversal_penalty.
+        _filter_params = self._trade_filter_params()
+
+        reasons: list[str] = []
+
+        # --- Confidence floor (regime-aware) ---
+        if regime == MarketRegime.RANGE:
+            if confidence < 0.55:
+                reasons.append(f"confidence {confidence:.2f} below threshold (range)")
+        else:
+            if confidence < _filter_params["min_confidence"]:
+                reasons.append(f"confidence {confidence:.2f} below threshold")
+
+        # --- Quality floor (regime-aware) ---
+        if regime == MarketRegime.RANGE:
+            if quality_score < 48:
+                reasons.append(f"quality {quality_score:.1f} below threshold (range)")
+        else:
+            if quality_score < _filter_params["min_quality"]:
+                reasons.append(f"quality {quality_score:.1f} below threshold")
+
+        # --- Evidence agreement (new pipeline only) ---
+        if _evidence is not None:
+            _min_ev = _filter_params.get("min_evidence_agreement", 0)
+            if _evidence.signal_count_above_threshold < _min_ev:
+                reasons.append(
+                    f"evidence agreement {_evidence.signal_count_above_threshold} below {_min_ev}"
+                )
+
+        # --- Regime filter ---
+        if hasattr(strategy, "allowed_regimes") and regime.value not in strategy.allowed_regimes:
+            reasons.append(f"regime {regime.value} disabled")
+
+        # --- Trend alignment (RELAXED — macro OR context must agree, new pipeline only) ---
+        if _bundle is not None:
+            direction = 1 if side == "long" else -1
+            macro_ok = _bundle.higher_trend * direction > 0
+            context_ok = _bundle.context_trend * direction > 0
+            if not (macro_ok or context_ok):
+                reasons.append("macro and context trends are not aligned")
+
+        # --- Legacy filters (R:R, stop distance, max confidence) ---
+        if _filter_params.get("max_confidence", 1.0) and confidence > _filter_params.get("max_confidence", 1.0):
+            reasons.append(f"confidence {confidence:.2f} is above {_filter_params['max_confidence']:.2f}")
+        if rr_ratio < _filter_params["min_rr_ratio"]:
+            reasons.append(f"R:R {rr_ratio:.2f} is below {_filter_params['min_rr_ratio']:.2f}")
+        if stop_distance_pct > _filter_params["max_stop_distance_pct"]:
+            reasons.append(
+                f"stop distance {stop_distance_pct:.2f}% is above {_filter_params['max_stop_distance_pct']:.2f}%"
+            )
+
+        tradable_reasons = reasons
+        is_tradable = len(reasons) == 0
         leverage_suggestion = _leverage_suggestion(
             stop_distance_pct=stop_distance_pct,
             quality_label=quality_label,

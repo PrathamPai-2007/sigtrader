@@ -32,6 +32,7 @@ class BacktestTrade:
     quality_label: str
     regime: str
     outcome: str = "unresolved"   # target_hit | stop_hit | neither | ambiguous_same_bar
+    exit_reason: str = ""         # momentum_failure | time_stop | soft_stop | breakeven | target_hit | stop_hit | neither
     mfe_pct: float = 0.0
     mae_pct: float = 0.0
     pnl_pct: float = 0.0

@@ -21,9 +21,9 @@
   "market_mode_tuning": {
     "intraday": {
       "target_cap_atr_mult": 1.9,
-      "min_confidence": 0.38,
+      "min_confidence": 0.52,
       "max_stop_distance_pct": 2.0,
-      "min_evidence_agreement": 3,
+      "min_evidence_agreement": 2,
       "min_evidence_edge": 1,
       "candidate_quote_asset": "USDT",
       "candidate_min_quote_volume": 25000000.0,
@@ -68,7 +68,8 @@
       "bullish_trend",
       "range",
       "breakout",
-      "exhaustion"
+      "exhaustion",
+      "volatile_chop"
     ],
 
     "signal_transforms": {
@@ -378,7 +379,7 @@
       "min_quality": 60.0,
       "min_rr_ratio": 1.5,
       "max_stop_distance_pct": 1.5,
-      "min_evidence_agreement": 3,
+      "min_evidence_agreement": 2,
       "min_evidence_edge": 1
     },
     "aggressive": {
@@ -386,7 +387,7 @@
       "target_cap_atr_mult": 3.5,
       "ambition_penalty_start_atr": 2.5,
       "ambition_penalty_slope": 0.06,
-      "min_confidence": 0.40,
+      "min_confidence": 0.50,
       "max_confidence": 1.0,
       "min_quality": 55.0,
       "min_rr_ratio": 2.0,
