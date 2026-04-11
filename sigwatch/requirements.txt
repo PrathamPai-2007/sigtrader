@@ -1,0 +1,4 @@
+httpx>=0.27.0
+pydantic>=2.7.0
+# sigforge must be installed from ../sigforge for the signal engine
+# pip install -e ../sigforge
