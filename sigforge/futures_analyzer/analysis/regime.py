@@ -5,8 +5,7 @@ from dataclasses import dataclass
 
 from futures_analyzer.analysis.indicators import adx, compute_adx_slope
 from futures_analyzer.analysis.models import Candle, MarketRegime
-
-import futures_analyzer.defaults as D
+from futures_analyzer.config import load_app_config, RegimeClassifierConfig
 
 
 @dataclass
@@ -54,13 +53,9 @@ def _atr_percentile(candles: list[Candle], window: int = _ATR_WINDOW) -> float:
     return float(max(0.0, min(100.0, count_lte / len(historical) * 100.0)))
 
 
-def _load_regime_cfg():
-    """Load regime classifier config, falling back to defaults module."""
-    try:
-        from futures_analyzer.config import load_app_config
-        return load_app_config().strategy.regime_classifier
-    except Exception:
-        return None
+def _load_regime_cfg() -> RegimeClassifierConfig:
+    """Load regime classifier config. Raises error if config is unavailable."""
+    return load_app_config().strategy.regime_classifier
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -70,16 +65,16 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 def _classify_single_tf(
     candles: list[Candle],
     tf_name: str,
-    cfg=None,
+    cfg: RegimeClassifierConfig,
 ) -> PerTFRegime:
-    """Classify a single timeframe. All thresholds come from config or defaults."""
-    # Resolve thresholds
-    adx_trend   = cfg.adx_trend_threshold   if cfg else D.ADX_TREND_THRESHOLD
-    adx_weak    = cfg.adx_weak_threshold    if cfg else D.ADX_WEAK_THRESHOLD
-    atr_volatile = cfg.atr_volatile_percentile if cfg else D.ATR_VOLATILE_PERCENTILE
-    atr_trend_max = cfg.atr_trend_max_percentile if cfg else D.ATR_TREND_MAX_PERCENTILE
-    slope_exhaustion = cfg.adx_slope_exhaustion if cfg else D.ADX_SLOPE_EXHAUSTION
-    slope_breakout   = cfg.adx_slope_breakout   if cfg else D.ADX_SLOPE_BREAKOUT
+    """Classify a single timeframe. All thresholds come from config."""
+    # Resolve thresholds from config
+    adx_trend   = cfg.adx_trend_threshold
+    adx_weak    = cfg.adx_weak_threshold
+    atr_volatile = cfg.atr_volatile_percentile
+    atr_trend_max = cfg.atr_trend_max_percentile
+    slope_exhaustion = cfg.adx_slope_exhaustion
+    slope_breakout   = cfg.adx_slope_breakout
 
     adx_result = adx(candles)
     adx_val  = adx_result["adx"]
@@ -151,9 +146,9 @@ def classify_regime_consensus(
     """
     cfg = _load_regime_cfg()
 
-    w_higher  = cfg.consensus_weight_higher  if cfg else D.CONSENSUS_WEIGHT_HIGHER
-    w_context = cfg.consensus_weight_context if cfg else D.CONSENSUS_WEIGHT_CONTEXT
-    w_trigger = cfg.consensus_weight_trigger if cfg else D.CONSENSUS_WEIGHT_TRIGGER
+    w_higher  = cfg.consensus_weight_higher
+    w_context = cfg.consensus_weight_context
+    w_trigger = cfg.consensus_weight_trigger
 
     tf_inputs = [
         (higher_candles,  "higher",  w_higher),
@@ -189,11 +184,11 @@ def classify_regime_consensus(
                 consensus_regime = tied[0]
 
     # Confidence: consensus_score × adx_conf_factor (all params from config)
-    adx_conf_base     = cfg.adx_conf_base     if cfg else D.ADX_CONF_BASE
-    adx_conf_range    = cfg.adx_conf_range    if cfg else D.ADX_CONF_RANGE
-    adx_conf_adx_base = cfg.adx_conf_adx_base if cfg else D.ADX_CONF_ADX_BASE
-    adx_conf_adx_range = cfg.adx_conf_adx_range if cfg else D.ADX_CONF_ADX_RANGE
-    di_bias_margin    = cfg.di_bias_margin    if cfg else D.DI_BIAS_MARGIN
+    adx_conf_base     = cfg.adx_conf_base
+    adx_conf_range    = cfg.adx_conf_range
+    adx_conf_adx_base = cfg.adx_conf_adx_base
+    adx_conf_adx_range = cfg.adx_conf_adx_range
+    di_bias_margin    = cfg.di_bias_margin
 
     higher_tf = per_tf[0]
     adx_conf_factor = _clamp(

@@ -353,7 +353,7 @@
   },
   "styles": {
     "conservative": {
-      "fallback_risk_reward": 1.2,
+"fallback_risk_reward": 1.5
       "target_cap_atr_mult": 2.0,
       "ambition_penalty_start_atr": 1.5,
       "ambition_penalty_slope": 0.10,

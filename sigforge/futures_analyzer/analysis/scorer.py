@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from statistics import mean
 
 from futures_analyzer.analysis.models import (
@@ -41,6 +40,8 @@ from futures_analyzer.analysis.regime import (
     classify_regime as _regime_classify,
     classify_regime_consensus,
 )
+from futures_analyzer.config import AppConfig, load_app_config, StrategyConfig
+from futures_analyzer.analysis.scoring.utils import _clamp, _quantize, _quality_label, _quality_score_cap_from_confidence
 
 
 @dataclass
@@ -132,6 +133,7 @@ class EvidenceVector:
     strongest_signals: list[tuple[str, float]]  # top 3 (name, strength)
     weakest_signals: list[tuple[str, float]]    # bottom 3
     regime_gate_passed: bool
+    debug: dict[str, float] | None = None
 
 
 @dataclass
@@ -255,7 +257,8 @@ def select_best_target(
     for price, label in candidates:
         if label.startswith("swing"):
             rr = abs(price - entry) / risk
-            if rr >= min_rr:
+            # Accept structure targets even if RR slightly lower
+            if rr >= min_rr * 0.7:
                 return price, label
     return candidates[0]
 
@@ -296,9 +299,13 @@ def place_entry_stop_target(
 
         # 1. Nearest swing low below entry
         valid_lows = [l for l in swings.recent_lows if l < entry - atr * 0.1]
+
         if valid_lows:
             nearest_low = max(valid_lows)
-            candidate_stops.append((nearest_low - atr_buffer, "swing_low"))
+            sweep_buffer = atr * 0.3
+            candidate_stops.append(
+                (nearest_low - atr_buffer - sweep_buffer, "swing_low_sweep")
+            )
 
         # 2. VWAP lower 1SD band
         if bundle.vwap_lower_1sd < entry:
@@ -320,7 +327,8 @@ def place_entry_stop_target(
         valid_highs = [h for h in swings.recent_highs if h > entry + atr * 0.3]
         if valid_highs:
             nearest_high = min(valid_highs)
-            candidate_targets.append((nearest_high, "swing_high"))
+            sweep_buffer = atr * 0.3
+            candidate_targets.append((nearest_high + sweep_buffer, "swing_high_sweep"))
 
         # 2. VWAP upper 2SD band
         if bundle.vwap_upper_2sd > entry:
@@ -443,47 +451,29 @@ def geometry_quality_score(
     regime: MarketRegime,
     confluence: dict[str, float],
     regime_confidence: float,
+    config: AppConfig | None = None,
 ) -> tuple[float, QualityLabel]:
     """Compute a quality score in [min_score, max_score] from setup geometry.
 
     All scoring parameters come from config.strategy.geometry_quality.
-    Falls back to defaults module if config is unavailable.
     """
-    import futures_analyzer.defaults as D
-    try:
-        from futures_analyzer.config import load_app_config
-        gq = load_app_config().strategy.geometry_quality
-        rr_weight              = gq.rr_weight
-        rr_cap                 = gq.rr_cap
-        stop_atr_ideal_min     = gq.stop_atr_ideal_min
-        stop_atr_ideal_max     = gq.stop_atr_ideal_max
-        stop_atr_bonus         = gq.stop_atr_bonus
-        stop_atr_penalty       = gq.stop_atr_penalty
-        anchor_swing_bonus     = gq.anchor_swing_bonus
-        anchor_vwap_bonus      = gq.anchor_vwap_bonus
-        anchor_vp_bonus        = gq.anchor_vp_bonus
-        anchor_atr_penalty     = gq.anchor_atr_penalty
-        entry_confluence_bonus = gq.entry_confluence_bonus
-        target_confluence_bonus = gq.target_confluence_bonus
-        base_score             = gq.base_score
-        min_score              = gq.min_score
-        max_score              = gq.max_score
-    except Exception:
-        rr_weight              = D.GQ_RR_WEIGHT
-        rr_cap                 = D.GQ_RR_CAP
-        stop_atr_ideal_min     = D.GQ_STOP_ATR_IDEAL_MIN
-        stop_atr_ideal_max     = D.GQ_STOP_ATR_IDEAL_MAX
-        stop_atr_bonus         = D.GQ_STOP_ATR_BONUS
-        stop_atr_penalty       = D.GQ_STOP_ATR_PENALTY
-        anchor_swing_bonus     = D.GQ_ANCHOR_SWING_BONUS
-        anchor_vwap_bonus      = D.GQ_ANCHOR_VWAP_BONUS
-        anchor_vp_bonus        = D.GQ_ANCHOR_VP_BONUS
-        anchor_atr_penalty     = D.GQ_ANCHOR_ATR_PENALTY
-        entry_confluence_bonus = D.GQ_ENTRY_CONFLUENCE_BONUS
-        target_confluence_bonus = D.GQ_TARGET_CONFLUENCE_BONUS
-        base_score             = D.GQ_BASE_SCORE
-        min_score              = D.GQ_MIN_SCORE
-        max_score              = D.GQ_MAX_SCORE
+    cfg = config or load_app_config()
+    gq = cfg.strategy.geometry_quality
+    rr_weight              = gq.rr_weight
+    rr_cap                 = gq.rr_cap
+    stop_atr_ideal_min     = gq.stop_atr_ideal_min
+    stop_atr_ideal_max     = gq.stop_atr_ideal_max
+    stop_atr_bonus         = gq.stop_atr_bonus
+    stop_atr_penalty       = gq.stop_atr_penalty
+    anchor_swing_bonus     = gq.anchor_swing_bonus
+    anchor_vwap_bonus      = gq.anchor_vwap_bonus
+    anchor_vp_bonus        = gq.anchor_vp_bonus
+    anchor_atr_penalty     = gq.anchor_atr_penalty
+    entry_confluence_bonus = gq.entry_confluence_bonus
+    target_confluence_bonus = gq.target_confluence_bonus
+    base_score             = gq.base_score
+    min_score              = gq.min_score
+    max_score              = gq.max_score
 
     # 1. R:R contribution (primary driver, 0–30 pts)
     rr_pts = min(geometry.rr_ratio, rr_cap) / rr_cap * rr_weight
@@ -537,14 +527,16 @@ def normalize_signals(
     market_meta: MarketMeta,
     side: str,
     regime: MarketRegime,
+    config: AppConfig | None = None,
+    signal_transforms=None,
 ) -> NormalizedSignals:
     """Convert raw indicator values to normalized [0, 1] signal strengths per side.
 
     All scaling factors come from config.strategy.signal_transforms — no magic numbers.
     All outputs are clamped to [0.0, 1.0]. No NaN or infinite values are produced.
     """
-    from futures_analyzer.config import load_app_config
-    t = load_app_config().strategy.signal_transforms
+    cfg = config or load_app_config()
+    t = signal_transforms if signal_transforms is not None else cfg.strategy.signal_transforms
 
     direction = 1.0 if side == "long" else -1.0
     px = market_meta.mark_price
@@ -650,6 +642,10 @@ def compute_graded_evidence(
     regime: MarketRegime,
     side: str,
     weights: dict[str, float],
+    *,
+    debug: bool = False,
+    regime_gate_thresholds: dict | None = None,
+    config: AppConfig | None = None,
 ) -> EvidenceVector:
     """Compute a weighted evidence strength score from normalized signals.
 
@@ -663,8 +659,28 @@ def compute_graded_evidence(
         for f in dataclasses.fields(signals)
     }
 
-    # Weighted sum: dot product of signal values and regime-specific weights
-    weighted_sum = sum(weights.get(name, 0.0) * value for name, value in signal_dict.items())
+    # Weighted sum: dot product of regime weights and directional signal values.
+    # Convert each normalized signal from [0, 1] to directional edge in [-1, 1]:
+    #   1.0 -> +1 (bullish dominance), 0.5 -> 0 (neutral), 0.0 -> -1 (bearish dominance)
+    raw_sum = 0.0
+    positive_contribution = 0.0
+    negative_contribution = 0.0
+    for name, value in signal_dict.items():
+        weight = weights.get(name, 0.0)
+        if weight == 0:
+            continue
+
+        # Convert [0,1] → [-1,1]
+        directional_value = (value - 0.5) * 2.0
+
+        contribution = weight * directional_value
+        raw_sum += contribution
+        if contribution >= 0.0:
+            positive_contribution += contribution
+        else:
+            negative_contribution += -contribution
+
+    weighted_sum = raw_sum
 
     # Count signals above 0.5 threshold
     signal_count_above_threshold = sum(1 for v in signal_dict.values() if v > 0.5)
@@ -676,12 +692,14 @@ def compute_graded_evidence(
     weakest_signals = sorted_asc[:3]
 
     # Regime gate check — thresholds from config.strategy.regime_gate_thresholds
-    try:
-        from futures_analyzer.config import load_app_config
-        config = load_app_config().strategy
-        thresholds = getattr(config, "regime_gate_thresholds", {}) or {}
-    except Exception:
-        thresholds = {}
+    if regime_gate_thresholds is None:
+        try:
+            cfg = config or load_app_config()
+            thresholds = getattr(cfg.strategy, "regime_gate_thresholds", {}) or {}
+        except Exception:
+            thresholds = {}
+    else:
+        thresholds = regime_gate_thresholds
 
     def _thr(key: str, default: float) -> float:
         return thresholds.get(key, default)
@@ -701,45 +719,57 @@ def compute_graded_evidence(
     else:
         regime_gate_passed = True
 
+    debug_payload: dict[str, float] | None = None
+    if debug:
+        total = positive_contribution + negative_contribution
+        signal_balance = (positive_contribution - negative_contribution) / max(total, 1e-12)
+        debug_payload = {
+            "raw_score": weighted_sum,
+            "positive_contribution": positive_contribution,
+            "negative_contribution": negative_contribution,
+            "signal_balance": signal_balance,
+        }
+
     return EvidenceVector(
         weighted_sum=weighted_sum,
         signal_count_above_threshold=signal_count_above_threshold,
         strongest_signals=strongest_signals,
         weakest_signals=weakest_signals,
         regime_gate_passed=regime_gate_passed,
+        debug=debug_payload,
     )
-
 
 def logistic_confidence(
     evidence_weighted_sum: float,
     regime: MarketRegime,
     side: str,
-    config,  # StrategyConfig from load_app_config().strategy
+    strategy: StrategyConfig,
 ) -> float:
     """Map evidence weighted sum to confidence via logistic sigmoid.
 
-    Uses regime/side-specific steepness and midpoint from config.logistic_params.
+    Uses regime/side-specific steepness from config.logistic_params.
     Falls back to the "default" entry in config.logistic_params, then to
-    defaults.LOGISTIC_DEFAULT_STEEPNESS / LOGISTIC_DEFAULT_MIDPOINT.
-    No hardcoded per-regime values — all params come from config.json.
-    """
-    import futures_analyzer.defaults as D
+    a minimal safe steepness value.
 
+    Midpoint shifting is intentionally not applied: the directional scoring
+    model is already centered around 0.0.
+    """
     key = f"{regime.value}_{side}"
-    logistic_params = getattr(config, "logistic_params", {}) or {}
+    logistic_params = getattr(strategy, "logistic_params", {}) or {}
     params = (
         logistic_params.get(key)
         or logistic_params.get(regime.value)
         or logistic_params.get("default")
     )
     if params is None:
-        steepness = D.LOGISTIC_DEFAULT_STEEPNESS
-        midpoint  = D.LOGISTIC_DEFAULT_MIDPOINT
+        steepness = 6.0  # Minimal safe fallback
     else:
-        steepness = params.steepness
-        midpoint  = params.midpoint
+        if isinstance(params, dict):
+            steepness = params.get("steepness", 6.0)
+        else:
+            steepness = getattr(params, "steepness", 6.0)
 
-    x = steepness * (evidence_weighted_sum - midpoint)
+    x = steepness * evidence_weighted_sum
     return _clamp(sigmoid(x), 0.0, 1.0)
 
 
@@ -747,11 +777,11 @@ def logistic_confidence_from_config(
     evidence_weighted_sum: float,
     regime: MarketRegime,
     side: str,
+    config: AppConfig | None = None,
 ) -> float:
-    """Convenience wrapper that loads config automatically."""
-    from futures_analyzer.config import load_app_config
-    config = load_app_config().strategy
-    return logistic_confidence(evidence_weighted_sum, regime, side, config)
+    """Convenience wrapper — requires config param."""
+    cfg = config or load_app_config()
+    return logistic_confidence(evidence_weighted_sum, regime, side, cfg.strategy)
 
 
 def _compute_atr(candles: list[Candle], period: int = 14) -> float:
@@ -789,6 +819,9 @@ def compute_all_indicators(
     context: list[Candle],
     higher: list[Candle],
     market_meta: MarketMeta,
+    indicator_params=None,
+    signal_transforms=None,
+    config: AppConfig | None = None,
 ) -> IndicatorBundle:
     """Compute all indicators in a single coordinated pass over the four timeframe candle lists.
 
@@ -806,9 +839,14 @@ def compute_all_indicators(
     higher_atr = _compute_atr(higher)
 
     # ── Trend: EMA(fast) vs EMA(slow) slope, normalized to [-1, 1] via tanh ──
-    from futures_analyzer.config import load_app_config as _lac
-    _ip = _lac().strategy.indicator_params
-    _st = _lac().strategy.signal_transforms
+    if indicator_params is None or signal_transforms is None:
+        cfg = config or load_app_config()
+        _strategy = cfg.strategy
+        _ip = indicator_params if indicator_params is not None else _strategy.indicator_params
+        _st = signal_transforms if signal_transforms is not None else _strategy.signal_transforms
+    else:
+        _ip = indicator_params
+        _st = signal_transforms
     _ema_fast = _ip.ema_fast_period
     _ema_slow = _ip.ema_slow_period
     _trend_tanh_scale = _st.trend_tanh_scale
@@ -972,7 +1010,8 @@ def compute_all_indicators(
     # ── OI / funding from market_meta ─────────────────────────────────────────
     funding_rate = getattr(market_meta, "funding_rate", None)
     oi_change_pct = getattr(market_meta, "open_interest_change_pct", None)
-    funding_momentum_val = 0.0  # placeholder — no historical funding data available
+    funding_history = getattr(market_meta, "funding_rate_history", None) or []
+    funding_momentum_val = _funding_momentum(funding_history)
 
     # ── Order book ────────────────────────────────────────────────────────────
     order_book_imbalance = getattr(market_meta, "order_book_imbalance", 0.0) or 0.0
@@ -1019,13 +1058,13 @@ def compute_all_indicators(
 
 
 def build_timeframe_plan(
+    config: AppConfig | None = None,
     *,
     style: StrategyStyle = StrategyStyle.CONSERVATIVE,
     market_mode: MarketMode = MarketMode.INTRADAY,
 ) -> TimeframePlan:
-    from futures_analyzer.config import load_app_config
-    config = load_app_config()
-    timeframe = config.timeframe_for(market_mode)
+    cfg = config or load_app_config()
+    timeframe = cfg.timeframe_for(market_mode)
     return TimeframePlan(
         profile_name=timeframe.profile_name,
         style=style,
@@ -1088,10 +1127,6 @@ class _SideMetrics:
     signal_strengths: dict[str, float] = field(default_factory=dict)
     evidence_weighted_sum: float = 0.0
     logistic_input: float = 0.0
-
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(value, high))
 
 
 def _atr(candles: list[Candle], period: int = 14) -> float:
@@ -1210,7 +1245,6 @@ def _confirmation_penalty(
     trigger_volume_surge: float,
     entry_volume_surge: float,
 ) -> float:
-    from futures_analyzer.config import load_app_config
     strategy = load_app_config().strategy
     direction = 1.0 if side == "long" else -1.0
     checks = [
@@ -1244,7 +1278,6 @@ def _funding_momentum(history: list[float], window: int = 4) -> float:
     Returns a normalised value in roughly [-1, 1]:
     positive = funding rising (crowded longs), negative = falling (crowded shorts).
     """
-    from futures_analyzer.config import load_app_config
     slope_scale = load_app_config().strategy.funding_momentum_slope_scale
     tail = history[-window:] if len(history) >= window else history
     n = len(tail)
@@ -1266,7 +1299,6 @@ def _oi_funding_biases(
     oi_change_pct: float | None,
     funding_rate_history: list[float] | None = None,
 ) -> tuple[float, float]:
-    from futures_analyzer.config import load_app_config
     s = load_app_config().strategy
     oi_delta = (oi_change_pct or 0.0) / 100.0
     if oi_delta < 0:
@@ -1294,40 +1326,6 @@ def _classify_regime(
     px: float,
 ) -> tuple[MarketRegime, float]:
     return _regime_classify(context_candles, higher_candles, trigger_atr, px)
-
-
-def _quantize(price: float, tick: float | None) -> float:
-    if tick is None or tick <= 0:
-        return round(price, 6)
-    try:
-        tick_decimal = Decimal(str(tick)).normalize()
-        price_decimal = Decimal(str(price))
-    except InvalidOperation:
-        return round(price, 10)
-    if tick_decimal <= 0:
-        return round(price, 10)
-    units = (price_decimal / tick_decimal).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    quantized = units * tick_decimal
-    precision = max(0, -tick_decimal.as_tuple().exponent)
-    return float(format(quantized, f".{min(precision, 16)}f"))
-
-
-def _quality_label(quality_score: float) -> QualityLabel:
-    if quality_score >= 75:
-        return QualityLabel.HIGH
-    if quality_score >= 55:
-        return QualityLabel.MEDIUM
-    return QualityLabel.LOW
-
-
-def _quality_score_cap_from_confidence(confidence: float) -> float:
-    from futures_analyzer.config import load_app_config
-    caps = load_app_config().strategy.confidence_quality_caps
-    if confidence < 0.45:
-        return caps["below_0_45"]
-    if confidence < 0.7:
-        return caps["below_0_70"]
-    return caps["default"]
 
 
 def _leverage_suggestion(
@@ -1624,6 +1622,7 @@ def _apply_reversal_penalty(
     setup: _SideMetrics,
     signals: dict[str, bool],
     regime: MarketRegime,
+    strategy: StrategyConfig,
 ) -> None:
     """Apply confidence/quality penalty when reversal signals fire.
 
@@ -1639,8 +1638,7 @@ def _apply_reversal_penalty(
         setup.components["reversal_signal_count"] = 0.0
         return
 
-    from futures_analyzer.config import load_app_config
-    s = load_app_config().strategy
+    s = strategy
 
     if count == 1:
         setup.confidence = _clamp(setup.confidence * s.reversal_1_confidence_mult, 0.0, 1.0)
@@ -1752,6 +1750,7 @@ def _score_confluence(
 def _apply_confluence_boost(
     setup: _SideMetrics,
     confluence: dict[str, float],
+    strategy: StrategyConfig,
 ) -> None:
     """Boost quality_score when multiple factors align at entry/target levels.
 
@@ -1761,8 +1760,7 @@ def _apply_confluence_boost(
     entry_c = confluence["entry_confluence"]
     target_c = confluence["target_confluence"]
 
-    from futures_analyzer.config import load_app_config
-    s = load_app_config().strategy
+    s = strategy
 
     if entry_c >= 3:
         setup.quality_score = _clamp(setup.quality_score + s.confluence_entry_3_boost, 10.0, 95.0)
@@ -1789,6 +1787,7 @@ class SetupAnalyzer:
         style: StrategyStyle = StrategyStyle.CONSERVATIVE,
         market_mode: MarketMode = MarketMode.INTRADAY,
         filter_overrides: dict[str, float] | None = None,
+        config: AppConfig | None = None,
     ) -> None:
         self.risk_reward = max(risk_reward, 0.5)
         self.style = style
@@ -1796,8 +1795,7 @@ class SetupAnalyzer:
         self._filter_overrides: dict[str, float] = filter_overrides or {}
         # Resolve config once at construction — avoids repeated imports and
         # lru_cache lookups inside hot paths (_mode_params / _trade_filter_params).
-        from futures_analyzer.config import load_app_config
-        self._config = load_app_config()
+        self._config = config or load_app_config()
 
     def _mode_params(self) -> dict[str, float]:
         tuning = self._config.style_tuning(self.style)
@@ -1884,15 +1882,15 @@ class SetupAnalyzer:
         entry_volume_surge: float,
         regime: MarketRegime,
     ) -> _EvidenceSnapshot:
-        from futures_analyzer.config import load_app_config
         direction = 1.0 if side == "long" else -1.0
+        _strategy = self._config.strategy
         checks = {
             "macro": higher_trend * direction > 0,
             "context": context_trend * direction > 0,
             "trigger": trigger_momentum * direction > 0,
             "entry": entry_momentum * direction > 0,
-            "pressure": ((trigger_pressure + entry_pressure) / 2.0) * direction > load_app_config().strategy.pressure_threshold,
-            "volume": max(trigger_volume_surge, entry_volume_surge) >= load_app_config().strategy.volume_surge_threshold,
+            "pressure": ((trigger_pressure + entry_pressure) / 2.0) * direction > _strategy.pressure_threshold,
+            "volume": max(trigger_volume_surge, entry_volume_surge) >= _strategy.volume_surge_threshold,
             "regime": _regime_alignment(regime, side) > 0.3,
         }
         agreement = sum(1 for ok in checks.values() if ok)
@@ -1937,13 +1935,12 @@ class SetupAnalyzer:
             setup.quality_score = min(setup.quality_score, _quality_score_cap_from_confidence(0.0))
             setup.quality_label = _quality_label(setup.quality_score)
             
-        from futures_analyzer.config import load_app_config
-        config = load_app_config()
-        if hasattr(config.strategy, "allowed_regimes") and regime.value not in config.strategy.allowed_regimes:
+        _strategy = self._config.strategy
+        if hasattr(_strategy, "allowed_regimes") and regime.value not in _strategy.allowed_regimes:
             setup.tradable_reasons.append(f"regime {regime.value} is globally disabled via StrategyConfig")
-        if hasattr(config.strategy, "enable_longs") and setup.side == "long" and not config.strategy.enable_longs:
+        if hasattr(_strategy, "enable_longs") and setup.side == "long" and not _strategy.enable_longs:
             setup.tradable_reasons.append("long setups are globally disabled via StrategyConfig")
-        if hasattr(config.strategy, "enable_shorts") and setup.side == "short" and not config.strategy.enable_shorts:
+        if hasattr(_strategy, "enable_shorts") and setup.side == "short" and not _strategy.enable_shorts:
             setup.tradable_reasons.append("short setups are globally disabled via StrategyConfig")
 
         if regime == MarketRegime.VOLATILE_CHOP:
@@ -2173,11 +2170,38 @@ class SetupAnalyzer:
         self._apply_deliberation(short_setup, short_evidence, long_evidence, regime)
 
         tradable_setups = [setup for setup in (long_setup, short_setup) if setup.is_tradable]
-        ranked_setups = tradable_setups if tradable_setups else [long_setup, short_setup]
-        primary = max(
-            ranked_setups,
-            key=lambda item: (item.is_tradable, item.evidence_agreement, item.score, item.quality_score, item.confidence),
-        )
+
+        # Selection logic:
+        # 1. If any setup is tradable, pick the best one among tradable setups.
+        # 2. If none are tradable, pick the one with higher confidence/score anyway.
+        # We also use higher oi_funding_bias as a tie-breaker (better tailwind).
+        # Selection logic:
+        # 1. If any setup is tradable, pick the best one among tradable setups.
+        # 2. If none are tradable, pick the one with higher confidence/score anyway.
+        # We also use higher oi_funding_bias as a tie-breaker (better tailwind).
+        if tradable_setups:
+            primary = max(
+                tradable_setups,
+                key=lambda item: (
+                    item.evidence_agreement, 
+                    item.score, 
+                    item.quality_score, 
+                    item.confidence,
+                    item.components.get("oi_funding_bias", 0.0)
+                ),
+            )
+        else:
+            primary = max(
+                [long_setup, short_setup],
+                key=lambda item: (
+                    item.evidence_agreement, 
+                    item.score, 
+                    item.quality_score, 
+                    item.confidence,
+                    item.components.get("oi_funding_bias", 0.0)
+                ),
+            )
+        
         secondary = short_setup if primary.side == "long" else long_setup
 
         warnings: list[str] = []
@@ -2221,8 +2245,8 @@ class SetupAnalyzer:
             rsi_divergence_type=enhanced_metrics.rsi_divergence_type,
             macd_histogram=enhanced_metrics.macd_histogram,
         )
-        _apply_reversal_penalty(long_setup, long_reversal, regime)
-        _apply_reversal_penalty(short_setup, short_reversal, regime)
+        _apply_reversal_penalty(long_setup, long_reversal, regime, self._config.strategy)
+        _apply_reversal_penalty(short_setup, short_reversal, regime, self._config.strategy)
 
         # Confluence zone detection (uses vp from volume profile, already computed)
         long_confluence = _score_confluence(
@@ -2243,8 +2267,8 @@ class SetupAnalyzer:
             atr=atr,
             volume_profile=vp,
         )
-        _apply_confluence_boost(long_setup, long_confluence)
-        _apply_confluence_boost(short_setup, short_confluence)
+        _apply_confluence_boost(long_setup, long_confluence, self._config.strategy)
+        _apply_confluence_boost(short_setup, short_confluence, self._config.strategy)
 
         # Recalculate quality labels after all post-build adjustments
         long_setup.quality_label = _quality_label(long_setup.quality_score)
@@ -2342,8 +2366,7 @@ class SetupAnalyzer:
         side: str,
     ) -> None:
         """Apply enhanced metrics adjustments to setup scoring."""
-        from futures_analyzer.config import load_app_config
-        s = load_app_config().strategy
+        s = self._config.strategy
 
         # 1. RSI-based confidence adjustment — directionally aware
         rsi_val = enhanced_metrics.rsi_14
@@ -2417,8 +2440,7 @@ class SetupAnalyzer:
         higher_candles: list[Candle] | None = None,
         market_meta: MarketMeta | None = None,
     ) -> _SideMetrics:
-        from futures_analyzer.config import load_app_config
-        strategy = load_app_config().strategy
+        strategy = self._config.strategy
         weights, penalty_multiplier, confidence_ceiling = _regime_weight_profile(regime, side)
         mode_params = self._mode_params()
         atr_buffer = max(atr * mode_params["atr_buffer_factor"], px * strategy.min_risk_px_factor)
@@ -2448,8 +2470,10 @@ class SetupAnalyzer:
                 context_candles,  # type: ignore[arg-type]
                 higher_candles,  # type: ignore[arg-type]
                 market_meta,  # type: ignore[arg-type]
+                indicator_params=strategy.indicator_params,
+                signal_transforms=strategy.signal_transforms,
             )
-            _signals = normalize_signals(_bundle, market_meta, side, regime)  # type: ignore[arg-type]
+            _signals = normalize_signals(_bundle, market_meta, side, regime, config=self._config, signal_transforms=strategy.signal_transforms)  # type: ignore[arg-type]
             # Use regime-specific weights from config when available (Phase 5 will
             # populate these with NormalizedSignals-compatible keys summing to 1.0).
             # Fall back to built-in defaults that match NormalizedSignals field names.
@@ -2473,8 +2497,8 @@ class SetupAnalyzer:
                     k: 1.0 / len(_NORMALIZED_SIGNAL_FIELDS)
                     for k in _NORMALIZED_SIGNAL_FIELDS
                 }
-            _evidence = compute_graded_evidence(_signals, regime, side, _signal_weights)
-            _new_confidence = logistic_confidence_from_config(_evidence.weighted_sum, regime, side)
+            _evidence = compute_graded_evidence(_signals, regime, side, _signal_weights, regime_gate_thresholds=getattr(strategy, "regime_gate_thresholds", None), config=self._config)
+            _new_confidence = logistic_confidence_from_config(_evidence.weighted_sum, regime, side, config=self._config)
             _new_confidence = min(_new_confidence, _confidence_ceiling)
             _strategy_logistic = getattr(strategy, "logistic_params", {}) or {}
             _logistic_params = (
@@ -2484,14 +2508,11 @@ class SetupAnalyzer:
             )
             if isinstance(_logistic_params, dict):
                 _steepness = _logistic_params.get("steepness", 6.0)
-                _midpoint = _logistic_params.get("midpoint", 0.5)
             elif _logistic_params is not None:
                 _steepness = getattr(_logistic_params, "steepness", 6.0)
-                _midpoint = getattr(_logistic_params, "midpoint", 0.5)
             else:
                 _steepness = 6.0
-                _midpoint = 0.5
-            _logistic_input = _steepness * (_evidence.weighted_sum - _midpoint)
+            _logistic_input = _steepness * _evidence.weighted_sum
 
             # Extract raw signal values from bundle for _confirmation_penalty and
             # _timeframe_alignment_score (these helpers expect the original [-1,1] scale).
@@ -2727,7 +2748,7 @@ class SetupAnalyzer:
             # by _apply_confluence_boost in analyze()).
             _confluence_dict: dict[str, float] = {"entry_confluence": 0.0, "target_confluence": 0.0}
             geo_quality_score, geo_quality_label = geometry_quality_score(
-                _geometry, regime, _confluence_dict, 0.5
+                _geometry, regime, _confluence_dict, 0.5, config=self._config
             )
             quality_score = geo_quality_score
             quality_label = geo_quality_label

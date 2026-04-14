@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from functools import lru_cache
+import json
+
 from futures_analyzer.analysis.models import Candle
 from futures_analyzer.backtest.models import BacktestTrade
+from futures_analyzer.config import DEFAULT_CONFIG_PATH
 from futures_analyzer.history.models import EvaluationOutcome
 
 _INTERVAL_MINUTES: dict[str, int] = {
@@ -16,6 +20,14 @@ _WINDOW_CAPS: dict[str, tuple[int, int]] = {
     "intraday":  (20, 200),   # 15m–1h: 20–200 bars
     "swing":     (10, 100),   # 4h–1d: 10–100 bars
 }
+
+
+@lru_cache(maxsize=1)
+def _load_runtime_config_dict() -> dict:
+    try:
+        return json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def evaluation_window_for_timeframe(interval: str, lookback_bars: int = 200) -> int:
@@ -82,6 +94,47 @@ def resolve_outcome(
     exit_reason = ""
     exit_price: float | None = None
 
+    runtime_cfg = _load_runtime_config_dict()
+    exit_cfg = runtime_cfg.get("exit") if isinstance(runtime_cfg, dict) else None
+    if not isinstance(exit_cfg, dict):
+        exit_cfg = {}
+
+    scaled_mode = (exit_cfg.get("mode") == "scaled" and side == "short")
+    tp1_rr: float | None = None
+    tp2_rr: float | None = None
+    tp1_size: float | None = None
+    move_stop_to_be_after_tp1 = False
+    if scaled_mode:
+        params = exit_cfg.get("range")
+        if not isinstance(params, dict):
+            params = {}
+        try:
+            tp1_rr = float(params.get("tp1_rr"))
+            tp2_rr = float(params.get("tp2_rr"))
+            tp1_size = float(params.get("tp1_size"))
+            move_stop_to_be_after_tp1 = bool(params.get("move_stop_to_be_after_tp1", False))
+        except Exception:
+            tp1_rr = None
+            tp2_rr = None
+            tp1_size = None
+            move_stop_to_be_after_tp1 = False
+
+    scaled_enabled = (
+        scaled_mode
+        and tp1_rr is not None and tp2_rr is not None and tp1_size is not None
+        and tp1_rr > 0 and tp2_rr > 0
+        and 0.0 < tp1_size < 1.0
+        and entry > 0
+        and abs(entry - stop) > 0
+    )
+
+    realized_pnl = 0.0
+    remaining_size = 1.0
+    if scaled_enabled:
+        risk = abs(entry - stop)
+        trade.tp1_price = entry - (risk * tp1_rr)
+        trade.tp2_price = entry - (risk * tp2_rr)
+
     mfe_running = 0.0
     mae_running = 0.0
 
@@ -100,6 +153,31 @@ def resolve_outcome(
 
         mfe_running = max(mfe_running, bar_mfe)
         mae_running = max(mae_running, bar_mae)
+
+        if scaled_enabled and remaining_size > 0 and trade.tp1_price is not None and trade.tp2_price is not None:
+            hit_stop = candle.high >= stop
+            hit_tp2 = candle.low <= trade.tp2_price
+            hit_tp1 = candle.low <= trade.tp1_price
+
+            if hit_stop and (hit_tp1 or hit_tp2):
+                outcome = EvaluationOutcome.AMBIGUOUS_SAME_BAR.value
+                exit_reason = "ambiguous_same_bar"
+                break
+
+            if hit_tp2:
+                realized_pnl += ((entry - trade.tp2_price) / entry) * 100.0 * remaining_size
+                remaining_size = 0.0
+                outcome = EvaluationOutcome.TARGET_HIT.value
+                exit_reason = "target_hit"
+                exit_price = trade.tp2_price
+                break
+
+            if hit_tp1 and not trade.tp1_hit:
+                realized_pnl += ((entry - trade.tp1_price) / entry) * 100.0 * tp1_size
+                remaining_size = max(1.0 - tp1_size, 0.0)
+                trade.tp1_hit = True
+                if move_stop_to_be_after_tp1:
+                    stop = entry
 
         # ── 1. Momentum failure (VERY conservative) ─────────────
         entry_momentum = (candle.close - entry) / max(entry, 1e-9)
@@ -138,6 +216,18 @@ def resolve_outcome(
             break
 
         # ── 5. Hard stop / target (existing logic, unchanged) ────────────────
+        if scaled_enabled:
+            hit_stop = candle.high >= stop
+            if hit_stop:
+                realized_pnl += ((entry - stop) / entry) * 100.0 * remaining_size
+                remaining_size = 0.0
+                outcome = EvaluationOutcome.STOP_HIT.value
+                exit_reason = "stop_hit"
+                exit_price = stop
+                break
+            prev_close = candle.close
+            continue
+
         if side == "long":
             hit_target = candle.high >= target
             hit_stop = candle.low <= stop
@@ -181,6 +271,21 @@ def resolve_outcome(
             pnl = ((entry - last_close) / entry) * 100.0
         if not exit_reason:
             exit_reason = "neither"
+
+    if scaled_enabled:
+        pnl_total = realized_pnl
+        if remaining_size > 0:
+            if exit_price is None:
+                exit_price = candles[-1].close
+                if not exit_reason:
+                    exit_reason = "neither"
+            pnl_total += ((entry - exit_price) / entry) * 100.0 * remaining_size
+        pnl = pnl_total
+
+    try:
+        pnl *= float(getattr(trade, "position_size", 1.0) or 1.0)
+    except Exception:
+        pass
 
     trade.outcome = outcome
     trade.exit_reason = exit_reason

@@ -4,6 +4,8 @@ import asyncio
 from bisect import bisect_right
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+import json
 import math
 import traceback
 
@@ -15,6 +17,7 @@ from futures_analyzer.analysis.models import (
 from futures_analyzer.analysis.scorer import SetupAnalyzer, build_timeframe_plan
 from futures_analyzer.backtest.evaluator import resolve_outcome
 from futures_analyzer.backtest.models import BacktestConfig, BacktestReport, BacktestTrade
+from futures_analyzer.config import DEFAULT_CONFIG_PATH, load_app_config
 from futures_analyzer.logging import get_logger
 from futures_analyzer.providers import BinanceFuturesProvider
 
@@ -27,6 +30,14 @@ _INTERVAL_MINUTES: dict[str, int] = {
 }
 _MIN_BARS = 30
 _MAX_PER_REQUEST = 1500
+
+
+@lru_cache(maxsize=1)
+def _load_runtime_config_dict() -> dict:
+    try:
+        return json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def _minutes(interval: str) -> int:
@@ -90,6 +101,7 @@ class BacktestRunner:
 
     def __init__(self, config: BacktestConfig) -> None:
         self.config = config
+        self._app_config = load_app_config()
 
     def _build_timeframe_plan(self) -> TimeframePlan:
         from futures_analyzer.config_presets import get_preset, StrategyPreset
@@ -109,7 +121,7 @@ class BacktestRunner:
                 )
             except Exception:
                 pass
-        return build_timeframe_plan(style=self.config.style, market_mode=self.config.market_mode)
+        return build_timeframe_plan(config=self._app_config, style=self.config.style, market_mode=self.config.market_mode)
 
     def _warmup_start(self, tfp: TimeframePlan) -> datetime:
         """Return a start time that includes enough warmup bars before config.start."""
@@ -182,6 +194,7 @@ class BacktestRunner:
             risk_reward=self.config.risk_reward,
             style=self.config.style,
             market_mode=self.config.market_mode,
+            config=self._app_config,
         )
 
         entry_closes = [c.close_time for c in entry_candles]
@@ -220,10 +233,20 @@ class BacktestRunner:
         _slip_vol_mult = 1.0
         if self.config.order_size_usd is not None:
             from futures_analyzer.history.evaluation import SlippageModel
-            from futures_analyzer.config import load_app_config
             _slip_cfg = load_app_config().slippage
             _slip_model = SlippageModel(_slip_cfg.default_model)
             _slip_vol_mult = _slip_cfg.volatility_multipliers.get("normal", 1.0)
+
+        runtime_cfg = _load_runtime_config_dict()
+        entry_filters = runtime_cfg.get("entry_filters") if isinstance(runtime_cfg, dict) else None
+        if not isinstance(entry_filters, dict):
+            entry_filters = {}
+        enable_confirmation = bool(entry_filters.get("enable_confirmation", False))
+        try:
+            confirmation_candles = int(entry_filters.get("confirmation_candles") or 1)
+        except Exception:
+            confirmation_candles = 1
+        confirmation_candles = max(1, confirmation_candles)
 
         trades: list[BacktestTrade] = []
         rejection_reasons: Counter[str] = Counter()
@@ -282,6 +305,29 @@ class BacktestRunner:
                 continue
 
             setup = result.primary_setup
+            if enable_confirmation and setup.side == "short":
+                required = confirmation_candles + 1
+                if len(entry_sl) < required:
+                    rejection_reasons["confirmation_insufficient_candles"] += 1
+                    continue
+                ok = True
+                for j in range(1, confirmation_candles + 1):
+                    if not (entry_sl[-j].close < entry_sl[-j - 1].close):
+                        ok = False
+                        break
+                if not ok:
+                    rejection_reasons["confirmation_failed"] += 1
+                    continue
+
+            position_size = 1.0
+            ps = runtime_cfg.get("position_sizing") if isinstance(runtime_cfg, dict) else None
+            if isinstance(ps, dict) and ps.get("mode") == "confidence_scaled":
+                try:
+                    from futures_analyzer.portfolio import get_position_size
+                    position_size = float(get_position_size(setup.confidence, runtime_cfg))
+                except Exception:
+                    position_size = 1.0
+
             trade = BacktestTrade(
                 bar_time=anchor.astimezone(UTC),
                 side=setup.side,
@@ -292,6 +338,7 @@ class BacktestRunner:
                 quality_score=setup.quality_score,
                 quality_label=setup.quality_label.value,
                 regime=result.market_regime.value,
+                position_size=position_size,
             )
 
             # Optional slippage adjustment (in-memory, no I/O)
@@ -385,6 +432,7 @@ class BacktestRunner:
             risk_reward=self.config.risk_reward,
             style=self.config.style,
             market_mode=self.config.market_mode,
+            config=self._app_config,
         )
         for fold_idx in range(folds):
             fold_start = self.config.start + timedelta(seconds=fold_idx * fold_seconds)

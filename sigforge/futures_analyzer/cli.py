@@ -162,7 +162,8 @@ async def _analyze_async(
             "min_evidence_edge": float(preset_config.min_evidence_edge),
         }
     else:
-        timeframe_plan = build_timeframe_plan(style=style, market_mode=market_mode)
+        config = load_app_config()
+        timeframe_plan = build_timeframe_plan(config=config, style=style, market_mode=market_mode)
         filter_overrides = {}
 
     owned_provider = provider is None
@@ -196,6 +197,7 @@ async def _analyze_async(
                 symbol=symbol,
                 market=market,
                 timeframe_plan=timeframe_plan,
+                config=config,
                 risk_reward=_resolve_risk_reward(style, risk_reward),
                 style=style,
                 market_mode=market_mode,

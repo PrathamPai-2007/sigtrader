@@ -21,10 +21,11 @@
   "market_mode_tuning": {
     "intraday": {
       "target_cap_atr_mult": 1.9,
-      "min_confidence": 0.52,
+      "min_confidence": 0.56,
+      "max_confidence": 0.86,
       "max_stop_distance_pct": 2.0,
       "min_evidence_agreement": 2,
-      "min_evidence_edge": 1,
+      "min_evidence_edge": 0,
       "candidate_quote_asset": "USDT",
       "candidate_min_quote_volume": 25000000.0,
       "candidate_pool_limit": 40,
@@ -66,9 +67,6 @@
     "allowed_regimes": [
       "bearish_trend",
       "bullish_trend",
-      "range",
-      "breakout",
-      "exhaustion",
       "volatile_chop"
     ],
 
@@ -143,17 +141,17 @@
     },
 
     "logistic_params": {
-      "range_long":  { "steepness": 12.0, "midpoint": 0.63 },
-      "range_short": { "steepness": 12.0, "midpoint": 0.63 },
+      "range_long":  { "steepness": 12.0, "midpoint": 0.5 },
+      "range_short": { "steepness": 12.0, "midpoint": 0.5 },
 
 
-      "bullish_trend_long":  { "steepness": 9.0, "midpoint": 0.62 },
-      "bullish_trend_short": { "steepness": 8.0, "midpoint": 0.60 },
+      "bullish_trend_long":  { "steepness": 9.0, "midpoint": 0.5 },
+      "bullish_trend_short": { "steepness": 8.0, "midpoint": 0.5 },
 
-      "bearish_trend_short": { "steepness": 9.0, "midpoint": 0.62 },
-      "bearish_trend_long":  { "steepness": 8.0, "midpoint": 0.60 },
+      "bearish_trend_short": { "steepness": 9.0, "midpoint": 0.5 },
+      "bearish_trend_long":  { "steepness": 8.0, "midpoint": 0.5 },
       
-      "default":     { "steepness": 12.0, "midpoint": 0.63 }
+      "default":     { "steepness": 12.0, "midpoint": 0.5 }
     },
 
     "regime_weights": {
@@ -350,7 +348,7 @@
     "leverage_floors": { "low": 2, "medium": 2, "high": 3 },
 
     "geometry_quality": {
-      "rr_weight": 30.0,
+      "rr_weight": 20.0,
       "rr_cap": 3.0,
       "stop_atr_ideal_min": 0.8,
       "stop_atr_ideal_max": 2.0,
@@ -370,14 +368,14 @@
 
   "styles": {
     "conservative": {
-      "fallback_risk_reward": 1.8,
+      "fallback_risk_reward": 1.0,
       "target_cap_atr_mult": 1.75,
       "ambition_penalty_start_atr": 1.25,
       "ambition_penalty_slope": 0.12,
-      "min_confidence": 0.52,
+      "min_confidence": 0.42,
       "max_confidence": 1.0,
-      "min_quality": 60.0,
-      "min_rr_ratio": 1.5,
+      "min_quality": 48.0,
+      "min_rr_ratio": 1.2,
       "max_stop_distance_pct": 1.5,
       "min_evidence_agreement": 2,
       "min_evidence_edge": 1
@@ -389,8 +387,8 @@
       "ambition_penalty_slope": 0.06,
       "min_confidence": 0.50,
       "max_confidence": 1.0,
-      "min_quality": 55.0,
-      "min_rr_ratio": 2.0,
+      "min_quality": 48.0,
+      "min_rr_ratio": 1.2,
       "max_stop_distance_pct": 2.5,
       "min_evidence_agreement": 4,
       "min_evidence_edge": 1
@@ -425,6 +423,40 @@
     "max_total_risk_pct": 0.06,
     "kelly_fraction": 0.25,
     "min_history_for_kelly": 10
+  },
+
+  "entry_filters": {
+    "enable_confirmation": true,
+    "confirmation_candles": 1,
+    "short_confirmation": {
+      "type": "momentum_loss"
+    }
+  },  
+  
+  "position_sizing": {
+    "mode": "confidence_scaled",
+    "base_size": 1.0,
+    "max_position_size": 1.5,
+    "confidence_tiers": [
+      { "min": 0.65, "max": 0.70, "multiplier": 0.75 },
+      { "min": 0.70, "max": 0.80, "multiplier": 1.0 },
+      { "min": 0.80, "max": 0.90, "multiplier": 1.25 },
+      { "min": 0.90, "max": 1.00, "multiplier": 1.5 }
+    ]
+  },
+
+  "exit": {
+    "mode": "scaled",
+    "range": {
+      "tp1_rr": 0.6,
+      "tp1_size": 0.5,
+      "tp2_rr": 1.2,
+      "tp2_size": 0.5,
+      "move_stop_to_be_after_tp1": true
+    },
+    "trend": {
+      "tp_rr": 1.2
+    }
   },
 
   "find_fallback_top": 3

@@ -122,16 +122,17 @@ def test_engine_fallback_rr_still_produces_metrics() -> None:
 
 def test_engine_funding_and_oi_bias_can_tilt_direction() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    trigger = _candles(start, 80, 100.0, 0.0)
-    context = _candles(start, 80, 100.0, 0.0)
+    trigger = _candles(start, 80, 100.0, -0.01)
+    context = _candles(start, 80, 100.0, -0.01)
     market = MarketMeta(
         symbol="XRPUSDT",
         mark_price=100.0,
         tick_size=0.01,
         step_size=0.1,
         funding_rate=0.0005,
+        funding_rate_history=[0.0001, 0.0002, 0.0003, 0.0004, 0.0005],
         open_interest=200_000.0,
-        open_interest_change_pct=3.0,
+        open_interest_change_pct=15.0,
     )
     result = SetupAnalyzer(risk_reward=2.0, style=StrategyStyle.CONSERVATIVE, market_mode=MarketMode.INTRADAY).analyze(
         symbol="XRPUSDT",
@@ -383,8 +384,14 @@ def test_engine_breakout_analysis_returns_valid_new_regime_and_setup_fields() ->
     )
 
     assert result.market_regime in set(MarketRegime)
-    assert result.primary_setup.stop_anchor in {"swing_low", "swing_high", "vwap_lower", "vwap_upper", "val", "vah", "atr_fallback"}
-    assert result.primary_setup.target_anchor in {"swing_high", "swing_low", "vwap_upper", "vwap_lower", "vah", "val", "atr_cap", "rr_enforced"}
+    assert result.primary_setup.stop_anchor in {
+        "swing_low", "swing_high", "vwap_lower", "vwap_upper", "val", "vah", "atr_fallback",
+        "swing_low_sweep", "swing_high_sweep"
+    }
+    assert result.primary_setup.target_anchor in {
+        "swing_high", "swing_low", "vwap_upper", "vwap_lower", "vah", "val", "atr_cap", "rr_enforced",
+        "swing_high_sweep", "swing_low_sweep"
+    }
     assert result.primary_setup.regime_state == result.market_regime.value
     assert result.primary_setup.signal_strengths
     assert all(0.0 <= value <= 1.0 for value in result.primary_setup.signal_strengths.values())

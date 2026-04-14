@@ -32,7 +32,7 @@ from futures_analyzer.analysis.scorer import (
 from futures_analyzer.history.models import DrawdownState
 from futures_analyzer.analysis.scorer import DrawdownAdjuster
 from futures_analyzer.portfolio import PortfolioRiskManager
-from futures_analyzer.config import PortfolioConfig
+from futures_analyzer.config import PortfolioConfig, StrategyConfig
 
 
 # ---------------------------------------------------------------------------
@@ -314,20 +314,20 @@ class TestScoreConfluence:
 class TestApplyReversalPenalty:
     def test_no_signals_no_penalty(self) -> None:
         m = _side_metrics(confidence=0.8, quality=70.0)
-        _apply_reversal_penalty(m, {}, MarketRegime.RANGE)
+        _apply_reversal_penalty(m, {}, MarketRegime.RANGE, StrategyConfig())
         assert m.confidence == pytest.approx(0.8)
         assert m.quality_score == pytest.approx(70.0)
         assert m.is_tradable is True
 
     def test_one_signal_reduces_confidence(self) -> None:
         m = _side_metrics(confidence=0.8, quality=70.0)
-        _apply_reversal_penalty(m, {"rsi_div": True}, MarketRegime.RANGE)
+        _apply_reversal_penalty(m, {"rsi_div": True}, MarketRegime.RANGE, StrategyConfig())
         assert m.confidence < 0.8
         assert m.is_tradable is True  # 1 signal alone doesn't block in non-chop
 
     def test_two_signals_reduce_confidence_and_quality(self) -> None:
         m = _side_metrics(confidence=0.8, quality=70.0)
-        _apply_reversal_penalty(m, {"rsi_div": True, "macd_cross": True}, MarketRegime.RANGE)
+        _apply_reversal_penalty(m, {"rsi_div": True, "macd_cross": True}, MarketRegime.RANGE, StrategyConfig())
         assert m.confidence < 0.8
         assert m.quality_score < 70.0
 
@@ -337,23 +337,24 @@ class TestApplyReversalPenalty:
             m,
             {"rsi_div": True, "macd_cross": True, "bb_squeeze": True},
             MarketRegime.RANGE,
+            StrategyConfig(),
         )
         assert m.is_tradable is False
         assert any("early reversal" in r for r in m.tradable_reasons)
 
     def test_one_signal_in_volatile_chop_blocks_trade(self) -> None:
         m = _side_metrics(confidence=0.8, quality=70.0)
-        _apply_reversal_penalty(m, {"rsi_div": True}, MarketRegime.VOLATILE_CHOP)
+        _apply_reversal_penalty(m, {"rsi_div": True}, MarketRegime.VOLATILE_CHOP, StrategyConfig())
         assert m.is_tradable is False
 
     def test_signal_count_stored_in_components(self) -> None:
         m = _side_metrics()
-        _apply_reversal_penalty(m, {"a": True, "b": True}, MarketRegime.RANGE)
+        _apply_reversal_penalty(m, {"a": True, "b": True}, MarketRegime.RANGE, StrategyConfig())
         assert m.components["reversal_signal_count"] == 2.0
 
     def test_zero_signal_count_stored_when_no_signals(self) -> None:
         m = _side_metrics()
-        _apply_reversal_penalty(m, {}, MarketRegime.RANGE)
+        _apply_reversal_penalty(m, {}, MarketRegime.RANGE, StrategyConfig())
         assert m.components["reversal_signal_count"] == 0.0
 
 
@@ -803,19 +804,21 @@ def _make_signals(**overrides: float) -> NormalizedSignals:
 class TestComputeGradedEvidence:
     """Tests for compute_graded_evidence — Requirements 4.1, 4.2, 4.3, 4.4, 4.5."""
 
-    # Req 4.1: weighted_sum is dot product of signal values and weights
-    def test_weighted_sum_is_dot_product(self) -> None:
+    # Req 4.1: weighted_sum uses directional conversion [0,1] → [-1,1]
+    def test_weighted_sum_directional_conversion(self) -> None:
         signals = _make_signals(higher_trend=1.0, context_trend=0.0)
         weights = {"higher_trend": 0.6, "context_trend": 0.4}
         result = compute_graded_evidence(signals, MarketRegime.RANGE, "long", weights)
-        # Only higher_trend and context_trend have non-zero weights
-        expected = 1.0 * 0.6 + 0.0 * 0.4
+        # 1.0 → +1.0, 0.0 → -1.0 after directional conversion
+        # weighted_sum = 0.6 * 1.0 + 0.4 * (-1.0) = 0.2
+        expected = 0.6 * 1.0 + 0.4 * (-1.0)
         assert result.weighted_sum == pytest.approx(expected)
 
-    def test_weighted_sum_with_equal_weights_and_all_half(self) -> None:
+    def test_weighted_sum_neutral_signals_produce_zero(self) -> None:
         signals = _make_signals()  # all 0.5
         result = compute_graded_evidence(signals, MarketRegime.RANGE, "long", _EQUAL_WEIGHTS)
-        assert result.weighted_sum == pytest.approx(0.5, abs=1e-6)
+        # 0.5 → 0.0 after directional conversion, so weighted_sum = 0
+        assert result.weighted_sum == pytest.approx(0.0, abs=1e-6)
 
     # Req 4.2: all strong signals → higher weighted_sum than all weak signals
     def test_strong_signals_produce_higher_weighted_sum_than_weak(self) -> None:
@@ -1077,7 +1080,7 @@ class TestPlaceEntryStopTarget:
             "long", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.stop_anchor in {"swing_low", "vwap_lower", "val", "atr_fallback", "rr_enforced"}
+        assert geo.stop_anchor in {"swing_low", "swing_low_sweep", "vwap_lower", "val", "atr_fallback", "rr_enforced"}
 
     def test_target_anchor_valid_long(self) -> None:
         swings = _make_swings()
@@ -1086,7 +1089,7 @@ class TestPlaceEntryStopTarget:
             "long", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.target_anchor in {"swing_high", "vwap_upper", "vah", "atr_cap", "rr_enforced"}
+        assert geo.target_anchor in {"swing_high", "swing_high_sweep", "vwap_upper", "vah", "atr_cap", "rr_enforced"}
 
     def test_stop_anchor_valid_short(self) -> None:
         swings = _make_swings()
@@ -1095,7 +1098,7 @@ class TestPlaceEntryStopTarget:
             "short", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.stop_anchor in {"swing_high", "vwap_upper", "vah", "atr_fallback", "rr_enforced"}
+        assert geo.stop_anchor in {"swing_high", "swing_high_sweep", "vwap_upper", "vah", "atr_fallback", "rr_enforced"}
 
     def test_target_anchor_valid_short(self) -> None:
         swings = _make_swings()
@@ -1104,7 +1107,7 @@ class TestPlaceEntryStopTarget:
             "short", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.target_anchor in {"swing_low", "vwap_lower", "val", "atr_cap", "rr_enforced"}
+        assert geo.target_anchor in {"swing_low", "swing_low_sweep", "vwap_lower", "val", "atr_cap", "rr_enforced"}
 
     # Req 6.5: long stop priority — swing_low preferred when available
     def test_long_stop_uses_swing_low_when_available(self) -> None:
@@ -1115,7 +1118,7 @@ class TestPlaceEntryStopTarget:
             "long", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.stop_anchor == "swing_low"
+        assert geo.stop_anchor in {"swing_low", "swing_low_sweep"}
 
     # Req 6.5: long stop falls back to atr_fallback when no swing lows below entry
     def test_long_stop_atr_fallback_when_no_swing_lows(self) -> None:
@@ -1139,7 +1142,7 @@ class TestPlaceEntryStopTarget:
             "long", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.target_anchor == "swing_high"
+        assert geo.target_anchor in {"swing_high", "swing_high_sweep"}
 
     # Req 6.7: short stop uses swing_high above entry
     def test_short_stop_uses_swing_high_when_available(self) -> None:

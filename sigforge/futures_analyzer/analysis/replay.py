@@ -7,6 +7,7 @@ import math
 
 from futures_analyzer.analysis.scorer import SetupAnalyzer
 from futures_analyzer.analysis.models import Candle, MarketMeta, MarketMode, StrategyStyle, TimeframePlan
+from futures_analyzer.config import load_app_config, AppConfig
 from futures_analyzer.providers import BinanceFuturesProvider
 
 _MIN_BARS_PER_TIMEFRAME = 30
@@ -95,6 +96,7 @@ async def find_latest_tradable_chart_timestamp(
     style: StrategyStyle,
     market_mode: MarketMode,
     replay_trigger_bars: int | None = None,
+    config: AppConfig | None = None,
 ) -> datetime | None:
     replay_trigger_bars = max(replay_trigger_bars or timeframe_plan.lookback_bars, 1)
     required_counts = {
@@ -149,10 +151,10 @@ async def find_latest_tradable_chart_timestamp(
     if min(len(entry_candles), len(trigger_candles), len(context_candles), len(higher_candles)) < _MIN_BARS_PER_TIMEFRAME:
         return None
 
-    from futures_analyzer.config import load_app_config
-    replay_cap = load_app_config().cache.replay_lookback_cap
+    cfg = config or load_app_config()
+    replay_cap = cfg.cache.replay_lookback_cap
 
-    analyzer = SetupAnalyzer(risk_reward=risk_reward, style=style, market_mode=market_mode)
+    analyzer = SetupAnalyzer(risk_reward=risk_reward, style=style, market_mode=market_mode, config=cfg)
     entry_closes = [candle.close_time for candle in entry_candles]
     trigger_closes = [candle.close_time for candle in trigger_candles]
     context_closes = [candle.close_time for candle in context_candles]

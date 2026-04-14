@@ -13,6 +13,7 @@ Kelly-fraction sizing is used when enough history exists; otherwise equal-weight
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from futures_analyzer.analysis.models import AnalysisResult
@@ -20,6 +21,52 @@ from futures_analyzer.config import PortfolioConfig
 from futures_analyzer.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def get_position_size(confidence: float, config: Mapping[str, object] | None) -> float:
+    position_sizing = (config or {}).get("position_sizing") if isinstance(config, Mapping) else None
+    if not isinstance(position_sizing, Mapping):
+        return 1.0
+
+    base_size = position_sizing.get("base_size", 1.0)
+    try:
+        base_size_f = float(base_size)
+    except Exception:
+        base_size_f = 1.0
+
+    max_position_size = position_sizing.get("max_position_size", base_size_f)
+    try:
+        max_position_size_f = float(max_position_size)
+    except Exception:
+        max_position_size_f = base_size_f
+
+    tiers = position_sizing.get("confidence_tiers", [])
+    if not isinstance(tiers, list):
+        tiers = []
+
+    try:
+        conf = float(confidence)
+    except Exception:
+        conf = -1.0
+
+    multiplier = 1.0
+    for tier in tiers:
+        if not isinstance(tier, Mapping):
+            continue
+        try:
+            min_c = float(tier.get("min", 0.0))
+            max_c = float(tier.get("max", 1.0))
+            mult = float(tier.get("multiplier", 1.0))
+        except Exception:
+            continue
+        if min_c <= conf <= max_c:
+            multiplier = mult
+            break
+
+    size = base_size_f * multiplier
+    if max_position_size_f > 0:
+        size = min(size, max_position_size_f)
+    return size if size > 0 else base_size_f
 
 
 @dataclass

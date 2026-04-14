@@ -1,9 +1,9 @@
 """
 Configuration loader.
 
-This module contains NO strategy logic, NO default weights, and NO fallback
-values beyond what is needed to parse the JSON schema.  All numeric constants
-live in futures_analyzer.defaults and in futures_analyzer.config.json.
+This module contains NO strategy logic. All numeric constants
+live in futures_analyzer.config.json. Pydantic model defaults are only
+used for schema-safe bootstrap values when keys are missing from JSON.
 """
 from __future__ import annotations
 
@@ -548,4 +548,5 @@ def load_app_config(path: Path | None = None) -> AppConfig:
 
 def refresh_app_config() -> None:
     """Clear the config cache so the next call re-reads disk."""
-    load_app_config.cache_clear()
+    if hasattr(load_app_config, "cache_clear"):
+        load_app_config.cache_clear()

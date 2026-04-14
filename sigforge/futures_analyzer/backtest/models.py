@@ -31,6 +31,10 @@ class BacktestTrade:
     quality_score: float
     quality_label: str
     regime: str
+    position_size: float = 1.0
+    tp1_hit: bool = False
+    tp1_price: float | None = None
+    tp2_price: float | None = None
     outcome: str = "unresolved"   # target_hit | stop_hit | neither | ambiguous_same_bar
     exit_reason: str = ""         # momentum_failure | time_stop | soft_stop | breakeven | target_hit | stop_hit | neither
     mfe_pct: float = 0.0

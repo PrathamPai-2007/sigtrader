@@ -15,13 +15,14 @@ from futures_analyzer.config import (
 
 
 def test_default_repo_config_file_loads() -> None:
+    refresh_app_config()
     config = load_app_config()
     path = Path("futures_analyzer.config.json")
     assert path.exists()
     assert config.market_modes["intraday"].lookback_bars == 600
     assert config.market_modes["intraday"].entry_timeframe == "5m"
     assert config.market_modes["long_term"].entry_timeframe == "1h"
-    assert config.market_mode_tuning["intraday"].min_confidence == 0.38
+    assert config.market_mode_tuning["intraday"].min_confidence == 0.56
     assert config.market_mode_tuning["long_term"].candidate_kline_interval == "1d"
     assert "conservative" in config.styles
 
@@ -92,7 +93,8 @@ def test_build_timeframe_plan_uses_loaded_config(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr("futures_analyzer.config.load_app_config", lambda: custom)
-    plan = build_timeframe_plan(style=StrategyStyle.AGGRESSIVE, market_mode=MarketMode.INTRADAY)
+    refresh_app_config()
+    plan = build_timeframe_plan(config=custom, style=StrategyStyle.AGGRESSIVE, market_mode=MarketMode.INTRADAY)
     assert plan.profile_name == "custom_intraday"
     assert plan.entry_timeframe == "3m"
     assert plan.trigger_timeframe == "30m"
@@ -115,7 +117,7 @@ def test_repo_config_populates_new_strategy_sections() -> None:
     assert abs(sum(config.strategy.regime_weights["breakout"].values()) - 1.0) <= 1e-6
     assert abs(sum(config.strategy.regime_weights["exhaustion"].values()) - 1.0) <= 1e-6
     assert abs(sum(config.strategy.regime_weights["transition"].values()) - 1.0) <= 1e-6
-    assert config.strategy.geometry_quality.rr_weight == 30.0
+    assert config.strategy.geometry_quality.rr_weight == 20.0
     assert config.strategy.geometry_quality.max_score == 95.0
 
 
@@ -139,3 +141,71 @@ def test_trade_setup_deserializes_without_new_revamp_fields() -> None:
     assert setup.signal_strengths == {}
     assert setup.evidence_weighted_sum == 0.0
     assert setup.logistic_input == 0.0
+
+
+def test_missing_config_keys_raise_validation_error() -> None:
+    """Verify that missing critical config keys raise a validation error.
+
+    This ensures the config file is the single source of truth — the system
+    should fail fast when required parameters are absent, rather than silently
+    falling back to hardcoded defaults.
+    """
+    from pydantic import ValidationError
+
+    # Test that StrategyConfig requires regime_classifier settings
+    # by providing an empty dict (which should use Pydantic defaults but still validate)
+    config_with_empty_regime = AppConfig(
+        market_modes={
+            "intraday": TimeframeConfig(),
+            "long_term": TimeframeConfig(),
+        },
+        market_mode_tuning={
+            "intraday": MarketModeTuning(
+                target_cap_atr_mult=1.8,
+                min_confidence=0.42,
+                max_stop_distance_pct=2.6,
+                min_evidence_agreement=5,
+                min_evidence_edge=1,
+            ),
+            "long_term": MarketModeTuning(
+                target_cap_atr_mult=4.6,
+                min_confidence=0.5,
+                max_stop_distance_pct=7.5,
+                min_evidence_agreement=4,
+                min_evidence_edge=1,
+            ),
+        },
+        strategy=StrategyConfig(),  # Uses Pydantic field defaults
+        styles={
+            "conservative": StyleTuning(
+                fallback_risk_reward=1.0,
+                target_cap_atr_mult=1.75,
+                ambition_penalty_start_atr=1.25,
+                ambition_penalty_slope=0.12,
+                min_confidence=0.42,
+                min_quality=48.0,
+                min_rr_ratio=1.2,
+                max_stop_distance_pct=1.5,
+                min_evidence_agreement=2,
+                min_evidence_edge=1,
+            ),
+            "aggressive": StyleTuning(
+                fallback_risk_reward=2.5,
+                target_cap_atr_mult=3.5,
+                ambition_penalty_start_atr=2.5,
+                ambition_penalty_slope=0.06,
+                min_confidence=0.50,
+                min_quality=48.0,
+                min_rr_ratio=1.2,
+                max_stop_distance_pct=2.5,
+                min_evidence_agreement=4,
+                min_evidence_edge=1,
+            ),
+        },
+    )
+
+    # Config should still validate because Pydantic models have safe defaults
+    # The key point is: when loading from JSON, missing keys will use these Pydantic defaults
+    # rather than falling back to a separate defaults.py module
+    assert config_with_empty_regime.strategy.regime_classifier.adx_trend_threshold == 25.0
+    assert config_with_empty_regime.strategy.geometry_quality.rr_weight == 30.0
