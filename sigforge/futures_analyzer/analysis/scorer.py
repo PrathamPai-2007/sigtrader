@@ -1062,18 +1062,19 @@ def build_timeframe_plan(
     *,
     style: StrategyStyle = StrategyStyle.CONSERVATIVE,
     market_mode: MarketMode = MarketMode.INTRADAY,
+    preset: str = "position_trader",
 ) -> TimeframePlan:
     cfg = config or load_app_config()
-    timeframe = cfg.timeframe_for(market_mode)
+    preset_config = cfg.get_preset(preset)
     return TimeframePlan(
-        profile_name=timeframe.profile_name,
+        profile_name=preset_config.profile_name,
         style=style,
         market_mode=market_mode,
-        entry_timeframe=timeframe.entry_timeframe,
-        context_timeframe=timeframe.context_timeframe,
-        trigger_timeframe=timeframe.trigger_timeframe,
-        higher_timeframe=timeframe.higher_timeframe,
-        lookback_bars=timeframe.lookback_bars,
+        entry_timeframe=preset_config.entry_timeframe,
+        context_timeframe=preset_config.context_timeframe,
+        trigger_timeframe=preset_config.trigger_timeframe,
+        higher_timeframe=preset_config.higher_timeframe,
+        lookback_bars=preset_config.lookback_bars,
     )
 
 
@@ -1788,59 +1789,42 @@ class SetupAnalyzer:
         market_mode: MarketMode = MarketMode.INTRADAY,
         filter_overrides: dict[str, float] | None = None,
         config: AppConfig | None = None,
+        preset: str = "position_trader",
     ) -> None:
         self.risk_reward = max(risk_reward, 0.5)
         self.style = style
         self.market_mode = market_mode
+        self.preset = preset
         self._filter_overrides: dict[str, float] = filter_overrides or {}
         # Resolve config once at construction — avoids repeated imports and
         # lru_cache lookups inside hot paths (_mode_params / _trade_filter_params).
         self._config = config or load_app_config()
 
     def _mode_params(self) -> dict[str, float]:
-        tuning = self._config.style_tuning(self.style)
-        mode_settings = self._config.market_mode_settings(self.market_mode)
+        preset_config = self._config.get_preset(self.preset)
         return {
-            "fallback_risk_reward": tuning.fallback_risk_reward,
-            "target_cap_atr_mult": (
-                mode_settings.target_cap_atr_mult
-                if mode_settings.target_cap_atr_mult is not None
-                else tuning.target_cap_atr_mult
-            ),
-            "ambition_penalty_start_atr": tuning.ambition_penalty_start_atr,
-            "ambition_penalty_slope": tuning.ambition_penalty_slope,
-            "atr_buffer_factor": tuning.atr_buffer_factor,
+            "fallback_risk_reward": preset_config.fallback_risk_reward,
+            "target_cap_atr_mult": preset_config.target_cap_atr_mult,
+            "ambition_penalty_start_atr": preset_config.ambition_penalty_start_atr,
+            "ambition_penalty_slope": preset_config.ambition_penalty_slope,
+            "atr_buffer_factor": 0.3,  # Default value since it's not in preset config
         }
 
     def _trade_filter_params(self) -> dict[str, float]:
-        tuning = self._config.style_tuning(self.style)
-        mode_settings = self._config.market_mode_settings(self.market_mode)
+        preset_config = self._config.get_preset(self.preset)
 
-        # Priority: market_mode < style < filter_overrides (runtime)
-        # market_mode contributes only fields it explicitly sets (non-None).
-        # style (tuning) always has values for every field and overrides market_mode.
-        # filter_overrides are runtime caller overrides and win above all.
-        mode_params: dict[str, float] = {
-            k: v for k, v in {
-                "min_confidence": mode_settings.min_confidence,
-                "max_stop_distance_pct": mode_settings.max_stop_distance_pct,
-                "min_evidence_agreement": mode_settings.min_evidence_agreement,
-                "min_evidence_edge": mode_settings.min_evidence_edge,
-            }.items() if v is not None
+        # Priority: preset config < filter_overrides (runtime)
+        base_params = {
+            "min_confidence": preset_config.min_confidence,
+            "max_confidence": preset_config.max_confidence,
+            "min_quality": preset_config.min_quality,
+            "min_rr_ratio": preset_config.min_rr_ratio,
+            "max_stop_distance_pct": preset_config.max_stop_distance_pct,
+            "min_evidence_agreement": float(preset_config.min_evidence_agreement),
+            "min_evidence_edge": float(preset_config.min_evidence_edge),
         }
-
-        style_params: dict[str, float] = {
-            "min_confidence": tuning.min_confidence,
-            "max_confidence": tuning.max_confidence,
-            "min_quality": tuning.min_quality,
-            "min_rr_ratio": tuning.min_rr_ratio,
-            "max_stop_distance_pct": tuning.max_stop_distance_pct,
-            "min_evidence_agreement": tuning.min_evidence_agreement,
-            "min_evidence_edge": tuning.min_evidence_edge,
-        }
-
-        # style_params last → style always overrides market_mode
-        params = {**mode_params, **style_params, **self._filter_overrides}
+        # Runtime filter overrides win above all
+        params = {**base_params, **self._filter_overrides}
         return params
 
     def _trade_filter_reasons(

@@ -12,11 +12,7 @@ from futures_analyzer.analysis.models import MarketMode, StrategyStyle
 class StrategyPreset(str, Enum):
     """Pre-configured strategy presets."""
     SCALPER = "scalper"  # High frequency, tight stops, small targets
-    DAY_TRADER = "day_trader"  # Intraday, medium timeframes
-    SWING_TRADER = "swing_trader"  # Multi-day, larger moves
     POSITION_TRADER = "position_trader"  # Long-term, macro trends
-    CONSERVATIVE = "conservative"  # Low risk, high quality only
-    AGGRESSIVE = "aggressive"  # Higher risk, more opportunities
 
 
 @dataclass
@@ -24,8 +20,6 @@ class PresetConfig:
     """Configuration preset with sensible defaults."""
     name: str
     description: str
-    style: StrategyStyle
-    market_mode: MarketMode
     entry_timeframe: str
     trigger_timeframe: str
     context_timeframe: str
@@ -46,9 +40,7 @@ class PresetConfig:
 PRESETS: dict[StrategyPreset, PresetConfig] = {
     StrategyPreset.SCALPER: PresetConfig(
         name="Scalper",
-        description="Trend-following scalper — trades with momentum, avoids range chop",
-        style=StrategyStyle.AGGRESSIVE,
-        market_mode=MarketMode.INTRADAY,
+        description="High-frequency trend-following scalper — trades with momentum, avoids range chop",
         entry_timeframe="1m",
         trigger_timeframe="5m",
         context_timeframe="15m",
@@ -64,105 +56,23 @@ PRESETS: dict[StrategyPreset, PresetConfig] = {
         leverage_cap=5,
         leverage_floor=2,
     ),
-    StrategyPreset.DAY_TRADER: PresetConfig(
-        name="Day Trader",
-        description="Intraday trading with medium timeframes",
-        style=StrategyStyle.AGGRESSIVE,
-        market_mode=MarketMode.INTRADAY,
-        entry_timeframe="5m",
-        trigger_timeframe="15m",
-        context_timeframe="1h",
-        higher_timeframe="4h",
-        lookback_bars=600,
-        min_confidence=0.38,
-        min_quality=38.0,
-        min_rr_ratio=1.0,
-        max_stop_distance_pct=2.0,
-        min_evidence_agreement=2,
-        min_evidence_edge=0,
-        target_cap_atr_mult=2.5,
-        leverage_cap=6,
-        leverage_floor=2,
-    ),
-    StrategyPreset.SWING_TRADER: PresetConfig(
-        name="Swing Trader",
-        description="Multi-day trading with larger moves",
-        style=StrategyStyle.CONSERVATIVE,
-        market_mode=MarketMode.INTRADAY,
-        entry_timeframe="1h",
-        trigger_timeframe="4h",
-        context_timeframe="1d",
-        higher_timeframe="1w",
-        lookback_bars=600,
-        min_confidence=0.44,
-        min_quality=48.0,
-        min_rr_ratio=1.5,
-        max_stop_distance_pct=3.0,
-        min_evidence_agreement=3,
-        min_evidence_edge=0,
-        target_cap_atr_mult=3.5,
-        leverage_cap=4,
-        leverage_floor=1,
-    ),
     StrategyPreset.POSITION_TRADER: PresetConfig(
         name="Position Trader",
-        description="Long-term trading following macro trends",
-        style=StrategyStyle.CONSERVATIVE,
-        market_mode=MarketMode.LONG_TERM,
-        entry_timeframe="1h",
-        trigger_timeframe="4h",
-        context_timeframe="1d",
-        higher_timeframe="1w",
-        lookback_bars=900,
-        min_confidence=0.50,
-        min_quality=52.0,
-        min_rr_ratio=2.0,
-        max_stop_distance_pct=5.0,
-        min_evidence_agreement=3,
-        min_evidence_edge=0,
-        target_cap_atr_mult=5.0,
-        leverage_cap=3,
-        leverage_floor=1,
-    ),
-    StrategyPreset.CONSERVATIVE: PresetConfig(
-        name="Conservative",
-        description="Low-risk strategy with strict filters",
-        style=StrategyStyle.CONSERVATIVE,
-        market_mode=MarketMode.INTRADAY,
+        description="Long-term trading following macro trends with conservative approach",
         entry_timeframe="5m",
         trigger_timeframe="15m",
         context_timeframe="1h",
         higher_timeframe="4h",
         lookback_bars=600,
-        min_confidence=0.50,
-        min_quality=55.0,
-        min_rr_ratio=1.8,
-        max_stop_distance_pct=2.5,
-        min_evidence_agreement=4,
-        min_evidence_edge=1,
-        target_cap_atr_mult=2.5,
-        leverage_cap=2,
-        leverage_floor=1,
-    ),
-    StrategyPreset.AGGRESSIVE: PresetConfig(
-        name="Aggressive",
-        description="High-risk strategy with relaxed filters",
-        style=StrategyStyle.AGGRESSIVE,
-        market_mode=MarketMode.INTRADAY,
-        entry_timeframe="5m",
-        trigger_timeframe="15m",
-        context_timeframe="1h",
-        higher_timeframe="4h",
-        lookback_bars=600,
-        min_confidence=0.36,
-        min_quality=35.0,
-        min_rr_ratio=1.0,
-        max_stop_distance_pct=3.0,
+        min_confidence=0.56,
+        min_quality=45.0,
+        min_rr_ratio=1.25,
+        max_stop_distance_pct=2.0,
         min_evidence_agreement=2,
-        min_evidence_edge=0,
-        target_cap_atr_mult=3.5,
-        leverage_cap=6,
-        leverage_floor=3,
+        min_evidence_edge=1,
+        target_cap_atr_mult=1.3,
+        leverage_cap=2,
+        leverage_floor=2,
     ),
 }
 
@@ -203,8 +113,6 @@ def list_presets() -> list[dict[str, Any]]:
             "name": preset.value,
             "display_name": config.name,
             "description": config.description,
-            "style": config.style.value,
-            "market_mode": config.market_mode.value,
         }
         for preset, config in PRESETS.items()
     ]

@@ -112,22 +112,13 @@ def _feedback_text_block(
     return render_feedback_text(rows, overview)
 
 
-def _resolve_risk_reward(style: StrategyStyle, risk_reward: float | None, config: "AppConfig | None" = None) -> float:
+def _resolve_risk_reward(style: StrategyStyle, risk_reward: float | None, preset: str = "position_trader", config: "AppConfig | None" = None) -> float:
     if risk_reward is not None:
         return risk_reward
     cfg = config or load_app_config()
-    return cfg.style_tuning(style).fallback_risk_reward
+    preset_config = cfg.get_preset(preset)
+    return preset_config.fallback_risk_reward
 
-
-def _resolve_preset(
-    preset: StrategyPreset | None,
-    style: StrategyStyle,
-    market_mode: MarketMode,
-) -> tuple[StrategyStyle, MarketMode, PresetConfig | None]:
-    if preset is not None:
-        cfg = get_preset(preset)
-        return cfg.style, cfg.market_mode, cfg
-    return style, market_mode, None
 
 
 async def _analyze_async(
@@ -137,6 +128,7 @@ async def _analyze_async(
     market_mode: MarketMode,
     *,
     preset_config: PresetConfig | None = None,
+    preset_name: str = "position_trader",
     provider: BinanceFuturesProvider | None = None,
 ):
     # Build the timeframe plan first — preset may override timeframes before
@@ -163,7 +155,7 @@ async def _analyze_async(
         }
     else:
         config = load_app_config()
-        timeframe_plan = build_timeframe_plan(config=config, style=style, market_mode=market_mode)
+        timeframe_plan = build_timeframe_plan(config=config, style=style, market_mode=market_mode, preset=preset_name)
         filter_overrides = {}
 
     owned_provider = provider is None
@@ -177,10 +169,11 @@ async def _analyze_async(
             provider.fetch_klines(symbol=symbol, interval=timeframe_plan.higher_timeframe, limit=timeframe_plan.lookback_bars),
         )
         analyzer = SetupAnalyzer(
-            risk_reward=_resolve_risk_reward(style, risk_reward),
+            risk_reward=_resolve_risk_reward(style, risk_reward, preset_name),
             style=style,
             market_mode=market_mode,
             filter_overrides=filter_overrides,
+            preset=preset_name,
         )
         result = analyzer.analyze(
             symbol=symbol,
@@ -192,15 +185,17 @@ async def _analyze_async(
             timeframe_plan=timeframe_plan,
         )
         try:
+            config = load_app_config()
             replay_timestamp = await find_latest_tradable_chart_timestamp(
                 provider=provider,
                 symbol=symbol,
                 market=market,
                 timeframe_plan=timeframe_plan,
                 config=config,
-                risk_reward=_resolve_risk_reward(style, risk_reward),
+                risk_reward=_resolve_risk_reward(style, risk_reward, preset_name),
                 style=style,
                 market_mode=market_mode,
+                preset=preset_name,
             )
             result = result.model_copy(update={"chart_replay_last_tradable_at": replay_timestamp})
         except Exception as exc:
@@ -219,6 +214,7 @@ async def _analyze_and_save_async(
     service: "HistoryService",
     *,
     preset_config: "PresetConfig | None" = None,
+    preset_name: str = "position_trader",
 ):
     result = await _analyze_async(
         symbol=symbol,
@@ -226,6 +222,7 @@ async def _analyze_and_save_async(
         style=style,
         market_mode=market_mode,
         preset_config=preset_config,
+        preset_name=preset_name,
     )
     # Apply drawdown guard before saving
     drawdown_state = service.recent_drawdown_state(symbol=symbol)
@@ -253,6 +250,7 @@ async def _scan_async(
     market_mode: MarketMode,
     preset_config: PresetConfig | None = None,
     service: HistoryService | None = None,
+    preset_name: str = "position_trader",
 ):
     symbols = QueryOptimizer.deduplicate_symbols(symbols)
     provider = BinanceFuturesProvider()
@@ -263,6 +261,7 @@ async def _scan_async(
             return await _analyze_async(
                 symbol=symbol, risk_reward=risk_reward, style=style,
                 market_mode=market_mode, preset_config=preset_config, provider=provider,
+                preset_name=preset_name,
             )
 
         results = await analyzer.analyze_batch(symbols, analyze_symbol, fail_fast=False)
@@ -286,11 +285,12 @@ async def _find_async(
     market_mode: MarketMode,
     preset_config: PresetConfig | None = None,
     service: HistoryService | None = None,
+    preset_name: str = "position_trader",
 ):
     provider = BinanceFuturesProvider()
     try:
         candidate_symbols = await provider.fetch_candidate_symbols(
-            market_mode=market_mode, limit=max(top, universe),
+            market_mode=market_mode, limit=max(top, universe), preset=preset_name,
         )
         if not candidate_symbols:
             return [], []
@@ -300,6 +300,7 @@ async def _find_async(
             return await _analyze_async(
                 symbol=symbol, risk_reward=risk_reward, style=style,
                 market_mode=market_mode, preset_config=preset_config, provider=provider,
+                preset_name=preset_name,
             )
 
         results = await analyzer.analyze_batch(candidate_symbols, analyze_symbol, fail_fast=False)
@@ -450,8 +451,7 @@ def presets() -> None:
     """List available strategy presets."""
     for preset in list_presets():
         typer.echo(f"  {preset['name']:<20} - {preset['display_name']:<20}")
-        typer.echo(f"    {preset['description']}")
-        typer.echo(f"    Style: {preset['style']}, Mode: {preset['market_mode']}\n")
+        typer.echo(f"    {preset['description']}\n")
 
 
 @app.command("analyse")
@@ -459,9 +459,7 @@ def presets() -> None:
 def analyse(
     symbol: str = typer.Option(..., "--symbol", help="Binance futures symbol, e.g. BTCUSDT"),
     risk_reward: float | None = typer.Option(None, "--risk-reward", min=0.5, help="Fallback risk:reward."),
-    style: StrategyStyle = typer.Option(StrategyStyle.CONSERVATIVE, "--style"),
-    market_mode: MarketMode = typer.Option(MarketMode.INTRADAY, "--mode"),
-    preset: StrategyPreset | None = typer.Option(None, "--preset", help="Named strategy preset. Overrides --style and --mode."),
+    preset: StrategyPreset = typer.Option(StrategyPreset.POSITION_TRADER, "--preset", help="Trading strategy preset."),
     refresh_config: bool = typer.Option(False, "--refresh-config", help="Reload config.json from disk (clears cache)."),
     order_size: float | None = typer.Option(None, "--order-size", min=1.0, help="Position size in USD for slippage analysis."),
     as_json: bool = typer.Option(False, "--json"),
@@ -476,7 +474,13 @@ def analyse(
     if refresh_config:
         print("=== FINAL CONFIG ===")
         print(config.model_dump_json(indent=2))
-    style, market_mode, preset_config = _resolve_preset(preset, style, market_mode)
+    
+    # Get preset configuration
+    preset_config = get_preset(preset)
+    # Use default style and market_mode since presets no longer specify them  
+    style = StrategyStyle.CONSERVATIVE
+    market_mode = MarketMode.INTRADAY
+    
     service = _history_service()
     _emit_progress_message(
         "Fetching market data and replaying recent charts to find the latest feasible setup. This can take a moment.",
@@ -486,6 +490,7 @@ def analyse(
         result = asyncio.run(_analyze_and_save_async(
             symbol=symbol.upper(), risk_reward=risk_reward, style=style,
             market_mode=market_mode, service=service, preset_config=preset_config,
+            preset_name=preset.value,
         ))
     except Exception as exc:
         _handle_error(exc, symbol=symbol.upper())
@@ -532,9 +537,7 @@ def analyse(
 def scan(
     symbols: str = typer.Option(..., "--symbols", help="Comma-separated Binance futures symbols."),
     risk_reward: float | None = typer.Option(None, "--risk-reward", min=0.5),
-    style: StrategyStyle = typer.Option(StrategyStyle.CONSERVATIVE, "--style"),
-    market_mode: MarketMode = typer.Option(MarketMode.INTRADAY, "--mode"),
-    preset: StrategyPreset | None = typer.Option(None, "--preset"),
+    preset: StrategyPreset = typer.Option(StrategyPreset.POSITION_TRADER, "--preset", help="Trading strategy preset."),
     top: int = typer.Option(5, "--top", min=1),
     correlate: bool = typer.Option(False, "--correlate", help="Append correlation warnings for top-ranked setups."),
     capital: float | None = typer.Option(None, "--capital", min=1.0, help="Total capital in USD for portfolio allocation."),
@@ -549,7 +552,13 @@ def scan(
     if refresh_config:
         print("=== FINAL CONFIG ===")
         print(config.model_dump_json(indent=2))
-    style, market_mode, preset_config = _resolve_preset(preset, style, market_mode)
+    
+    # Get preset configuration
+    preset_config = get_preset(preset)
+    # Use default style and market_mode since presets no longer specify them
+    style = StrategyStyle.CONSERVATIVE
+    market_mode = MarketMode.INTRADAY
+    
     service = _history_service()
     parsed_symbols = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not parsed_symbols:
@@ -561,6 +570,7 @@ def scan(
     scan_results = asyncio.run(_scan_async(
         parsed_symbols, risk_reward=risk_reward, style=style,
         market_mode=market_mode, preset_config=preset_config, service=service,
+        preset_name=preset.value,
     ))
     successes: list[tuple[str, object]] = []
     failures: list[dict[str, str]] = []
@@ -644,9 +654,7 @@ def find(
     top: int = typer.Option(5, "--top", min=1),
     universe: int = typer.Option(20, "--universe", min=1),
     risk_reward: float | None = typer.Option(None, "--risk-reward", min=0.5),
-    style: StrategyStyle = typer.Option(StrategyStyle.AGGRESSIVE, "--style"),
-    market_mode: MarketMode = typer.Option(MarketMode.INTRADAY, "--mode"),
-    preset: StrategyPreset | None = typer.Option(None, "--preset"),
+    preset: StrategyPreset = typer.Option(StrategyPreset.POSITION_TRADER, "--preset", help="Trading strategy preset."),
     correlate: bool = typer.Option(False, "--correlate", help="Append correlation warnings for top-ranked setups."),
     capital: float | None = typer.Option(None, "--capital", min=1.0, help="Total capital in USD for portfolio allocation."),
     refresh_config: bool = typer.Option(False, "--refresh-config", help="Reload config.json from disk (clears cache)."),
@@ -660,7 +668,13 @@ def find(
     if refresh_config:
         print("=== FINAL CONFIG ===")
         print(config.model_dump_json(indent=2))
-    style, market_mode, preset_config = _resolve_preset(preset, style, market_mode)
+    
+    # Get preset configuration
+    preset_config = get_preset(preset)
+    # Use default style and market_mode since presets no longer specify them
+    style = StrategyStyle.CONSERVATIVE
+    market_mode = MarketMode.INTRADAY
+    
     service = _history_service()
     _emit_progress_message(
         "Finding liquid candidates, fetching market data, and replaying recent charts under the current rules. This can take a moment.",
@@ -670,6 +684,7 @@ def find(
         candidate_symbols, find_results = asyncio.run(_find_async(
             top=top, universe=universe, risk_reward=risk_reward, style=style,
             market_mode=market_mode, preset_config=preset_config, service=service,
+            preset_name=preset.value,
         ))
     except Exception as exc:
         _handle_error(exc)

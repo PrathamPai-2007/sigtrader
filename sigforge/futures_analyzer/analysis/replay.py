@@ -97,6 +97,7 @@ async def find_latest_tradable_chart_timestamp(
     market_mode: MarketMode,
     replay_trigger_bars: int | None = None,
     config: AppConfig | None = None,
+    preset: str = "position_trader",
 ) -> datetime | None:
     replay_trigger_bars = max(replay_trigger_bars or timeframe_plan.lookback_bars, 1)
     required_counts = {
@@ -154,7 +155,7 @@ async def find_latest_tradable_chart_timestamp(
     cfg = config or load_app_config()
     replay_cap = cfg.cache.replay_lookback_cap
 
-    analyzer = SetupAnalyzer(risk_reward=risk_reward, style=style, market_mode=market_mode, config=cfg)
+    analyzer = SetupAnalyzer(risk_reward=risk_reward, style=style, market_mode=market_mode, config=cfg, preset=preset)
     entry_closes = [candle.close_time for candle in entry_candles]
     trigger_closes = [candle.close_time for candle in trigger_candles]
     context_closes = [candle.close_time for candle in context_candles]

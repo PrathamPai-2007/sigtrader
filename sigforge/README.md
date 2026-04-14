@@ -22,21 +22,20 @@ sigforge
 
 # Analyse one symbol
 sigforge analyse --symbol BTCUSDT
-sigforge analyse --symbol BTCUSDT --style aggressive
-sigforge analyse --symbol BTCUSDT --mode long_term
-sigforge analyse --symbol BTCUSDT --preset swing_trader
+sigforge analyse --symbol BTCUSDT --preset scalper
+sigforge analyse --symbol BTCUSDT --preset position_trader
 sigforge analyse --symbol BTCUSDT --order-size 5000
 sigforge analyse --symbol BTCUSDT --json
 sigforge analyse --symbol BTCUSDT --export report.html
 
 # Scan a list of symbols
 sigforge scan --symbols BTCUSDT,ETHUSDT,SOLUSDT
-sigforge scan --symbols BTCUSDT,ETHUSDT,SOLUSDT --top 3 --correlate
+sigforge scan --symbols BTCUSDT,ETHUSDT,SOLUSDT --preset scalper --top 3 --correlate
 sigforge scan --symbols BTCUSDT,ETHUSDT,SOLUSDT --capital 10000
 
 # Auto-find best setups from liquid candidates
 sigforge find
-sigforge find --universe 30 --top 8 --mode long_term
+sigforge find --preset position_trader --universe 30 --top 8
 sigforge find --capital 10000 --correlate
 
 # Backtest
@@ -79,13 +78,13 @@ sigforge history clear
 
 ## Features
 
+## Features
+
 - Multi-timeframe analysis across entry, trigger, context, and higher timeframes
 - Seven-state regime model: `bullish_trend`, `bearish_trend`, `range`, `volatile_chop`, `breakout`, `exhaustion`, `transition`
 - Normalized 16-signal scoring pipeline with logistic confidence mapping
 - Geometry engine for entry, stop, target, anchor selection, and quality scoring
-- Strategy styles: `conservative` and `aggressive`
-- Trading modes: `intraday` and `long_term`
-- Named strategy presets via `--preset` (see [Presets](#presets))
+- Two streamlined trading presets: `scalper` and `position_trader`
 - Single-symbol analysis, multi-symbol scan, and auto candidate discovery with `find`
 - Near-miss fallback candidates when no setup clears hard filters
 - Replay-backed "last feasible setup" timestamps from historical charts
@@ -95,7 +94,7 @@ sigforge history clear
 - Slippage estimation with volatility-adjusted models
 - Correlation analysis and concentration warnings
 - Walk-forward backtesting with configurable fold count
-- Config-driven tuning via `futures_analyzer.config.json` with correct priority: `defaults < market_mode < style`
+- Simplified preset-based configuration via `futures_analyzer.config.json`
 - Config loaded once per CLI run and cached for the duration of the session
 
 ## Analysis Pipeline
@@ -117,22 +116,24 @@ Each setup flows through the same core stages:
 
 ## Presets
 
-Named presets bundle a full timeframe stack and filter thresholds. Pass `--preset` to any of `analyse`, `scan`, or `find`.
+The system uses two streamlined presets that contain all necessary configuration. Pass `--preset` to any of `analyse`, `scan`, or `find`.
 
-| Preset | Style | Mode | Description |
-|--------|-------|------|-------------|
-| `scalper` | aggressive | intraday | Tight stops, small targets, trend-following |
-| `day_trader` | aggressive | intraday | Medium intraday timeframes |
-| `swing_trader` | conservative | intraday | Multi-day moves on higher timeframes |
-| `position_trader` | conservative | long_term | Macro trend following |
-| `conservative` | conservative | intraday | Strict filters, high quality only |
-| `aggressive` | aggressive | intraday | Relaxed filters, more opportunities |
+| Preset | Description |
+|--------|-------------|
+| `scalper` | High-frequency trend-following with tight stops, small targets, and aggressive filters |
+| `position_trader` | Conservative approach with relaxed filters and longer timeframes (default) |
 
 ```bash
 sigforge presets                          # list all with descriptions
 sigforge analyse --symbol BTCUSDT --preset scalper
-sigforge find --preset swing_trader --top 5
+sigforge find --preset position_trader --top 5
 ```
+
+Each preset contains its complete configuration including:
+- Timeframe stack (entry/trigger/context/higher)
+- Filter thresholds (confidence, quality, evidence requirements)
+- Risk parameters (stop distance, R:R ratios, target caps)
+- Candidate selection criteria (volume, pool size, lookback periods)
 
 ## Output
 
@@ -157,41 +158,54 @@ All commands support `--json` for machine-readable output and `--export <file.ht
 
 Config is loaded **once per CLI invocation** and cached for the duration of the run. Every load prints `[CONFIG] Loaded from <path> at <timestamp>` so you always know which file is active.
 
-### Parameter priority
+## Config
 
-Filter parameters are resolved in this order (later overrides earlier):
+`sigforge` auto-loads `futures_analyzer.config.json` from the working directory. If the file does not exist, a minimal valid config is written automatically.
 
+Config is loaded **once per CLI invocation** and cached for the duration of the run. Every load prints `[CONFIG] Loaded from <path> at <timestamp>` so you always know which file is active.
+
+### Simplified Structure
+
+The configuration has been streamlined to use preset-based organization:
+
+```json
+{
+  "presets": {
+    "position_trader": { /* complete config for position trader */ },
+    "scalper": { /* complete config for scalper */ }
+  },
+  "strategy": { /* shared strategy parameters */ },
+  "cache": { /* cache settings */ },
+  "slippage": { /* slippage models */ },
+  "drawdown": { /* drawdown thresholds */ },
+  "portfolio": { /* portfolio risk controls */ }
+}
 ```
-defaults  <  market_mode_tuning  <  styles
-```
-
-Style values always win. `market_mode_tuning` can narrow a parameter (e.g. tighter `min_confidence` for intraday) but style is the final word. Runtime `--preset` filter overrides sit above all config layers.
 
 ### Key config sections
 
 | Section | Description |
 |---------|-------------|
-| `market_modes` | Timeframe stacks per mode (`intraday`, `long_term`) |
-| `market_mode_tuning` | Per-mode filter overrides (`min_confidence`, `max_stop_distance_pct`, etc.) |
-| `styles` | Per-style filter thresholds (`conservative`, `aggressive`) |
-| `strategy` | Signal weights, regime weights, logistic params, geometry quality, leverage caps, enhanced metrics thresholds, confluence boosts, reversal penalties |
-| `cache` | TTLs for market meta, realtime klines, historical klines, and replay lookback cap |
+| `presets` | Contains complete configurations for `scalper` and `position_trader` |
+| `presets.<name>` | Individual preset with timeframes, filters, and candidate selection |
+| `strategy` | Signal weights, regime weights, logistic params, geometry quality |
+| `cache` | TTLs for market meta, realtime klines, historical klines |
 | `slippage` | Default model and volatility multipliers |
-| `drawdown` | Lookback window and severity thresholds (mild / moderate / severe) |
-| `portfolio` | Max position size, max risk per trade, cluster risk cap, Kelly fraction |
+| `drawdown` | Lookback window and severity thresholds |
+| `portfolio` | Max position size, max risk per trade, Kelly fraction |
 
-Key top-level fields:
+Key preset fields:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `find_fallback_top` | `3` | Near-miss candidates shown when no tradable setup is found |
-| `strategy.logistic_params` | built-in defaults | Regime-aware steepness and midpoint for confidence calibration |
-| `strategy.geometry_quality` | built-in defaults | Weights for R:R, ATR stop quality, anchors, and confluence |
-| `strategy.regime_weights` | normalized profiles | Per-regime signal weight profiles, must sum to `1.0` |
-| `drawdown.lookback` | `10` | Resolved trades examined for drawdown state |
-| `portfolio.max_position_pct` | `0.20` | Max single position as fraction of capital |
-| `portfolio.max_risk_per_trade_pct` | `0.02` | Max dollar risk per trade |
-| `portfolio.kelly_fraction` | `0.25` | Quarter-Kelly scaling factor |
+| Key | Description |
+|-----|-------------|
+| `entry_timeframe`, `trigger_timeframe`, `context_timeframe`, `higher_timeframe` | Multi-timeframe analysis stack |
+| `lookback_bars` | Historical bars to analyze |
+| `min_confidence`, `max_confidence` | Confidence thresholds for trade filters |
+| `min_quality`, `min_rr_ratio` | Quality and risk:reward requirements |
+| `max_stop_distance_pct` | Maximum stop distance as percentage |
+| `min_evidence_agreement`, `min_evidence_edge` | Evidence requirements |
+| `target_cap_atr_mult` | Target distance cap in ATR multiples |
+| `candidate_*` | Symbol selection criteria for `find` command |
 
 All config sections are backward-compatible. Missing keys fall back to built-in defaults.
 

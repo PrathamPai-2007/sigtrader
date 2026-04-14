@@ -487,20 +487,22 @@ class BinanceFuturesProvider:
         ranked.sort(reverse=True)
         return [symbol for _, symbol in ranked[:capped_limit]]
 
-    async def fetch_candidate_symbols(self, *, market_mode: MarketMode, limit: int = 20) -> list[str]:
+    async def fetch_candidate_symbols(self, *, market_mode: MarketMode, limit: int = 20, preset: str = "position_trader") -> list[str]:
         from futures_analyzer.config import load_app_config
-        settings = load_app_config().market_mode_settings(market_mode)
+        config = load_app_config()
+        preset_config = config.get_preset(preset)
+        
         if market_mode == MarketMode.LONG_TERM:
             return await self.fetch_long_term_candidates(
                 limit=limit,
-                quote_asset=settings.candidate_quote_asset,
-                min_quote_volume=settings.candidate_min_quote_volume,
-                interval=settings.candidate_kline_interval,
-                lookback=settings.candidate_kline_lookback,
-                candidate_pool_limit=settings.candidate_pool_limit,
+                quote_asset=preset_config.candidate_quote_asset,
+                min_quote_volume=preset_config.candidate_min_quote_volume,
+                interval=preset_config.candidate_kline_interval,
+                lookback=preset_config.candidate_kline_lookback,
+                candidate_pool_limit=preset_config.candidate_pool_limit,
             )
         return await self.fetch_intraday_candidates(
             limit=limit,
-            quote_asset=settings.candidate_quote_asset,
-            min_quote_volume=settings.candidate_min_quote_volume,
+            quote_asset=preset_config.candidate_quote_asset,
+            min_quote_volume=preset_config.candidate_min_quote_volume,
         )
