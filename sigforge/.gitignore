@@ -22,6 +22,7 @@ dist/
 logs/
 reports/
 tmp_pdf_imgs/
+tmp/
 .vscode/
 .idea/
 analysis_report_test.html
@@ -34,3 +35,4 @@ coverage.xml
 plans/
 .kiro/
 futures_analyzer.config.json.backup
+gpt_report.txt

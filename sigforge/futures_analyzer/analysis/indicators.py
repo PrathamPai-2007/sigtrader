@@ -994,6 +994,10 @@ def compute_all_indicators(
     rsi_divergence_type = div_type
     rsi_divergence_strength = div_strength
 
+    # --- EMA 20 on entry timeframe ---
+    _entry_closes = [c.close for c in entry]
+    ema_20 = _ema_value(_entry_closes, 20) if _entry_closes else 0.0
+
     # --- OI / funding from market_meta ---
     funding_rate = getattr(market_meta, "funding_rate", None)
     oi_change_pct = getattr(market_meta, "open_interest_change_pct", None)
@@ -1040,6 +1044,7 @@ def compute_all_indicators(
         funding_momentum=funding_momentum_val,
         order_book_imbalance=order_book_imbalance,
         bid_ask_spread_pct=bid_ask_spread_pct,
+        ema_20=ema_20,
         warnings=warnings_list,
     )
 
@@ -1295,6 +1300,10 @@ def compute_all_indicators(
     rsi_divergence_type = div_type
     rsi_divergence_strength = div_strength
 
+    # --- EMA 20 on entry timeframe ---
+    _entry_closes2 = [c.close for c in entry]
+    ema_20 = _ema_value(_entry_closes2, 20) if _entry_closes2 else 0.0
+
     # --- OI / funding from market_meta ---
     funding_rate = getattr(market_meta, "funding_rate", None)
     oi_change_pct = getattr(market_meta, "open_interest_change_pct", None)
@@ -1341,5 +1350,6 @@ def compute_all_indicators(
         funding_momentum=funding_momentum_val,
         order_book_imbalance=order_book_imbalance,
         bid_ask_spread_pct=bid_ask_spread_pct,
+        ema_20=ema_20,
         warnings=warnings_list,
     )

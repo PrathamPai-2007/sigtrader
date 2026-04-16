@@ -2,7 +2,7 @@
 
 > ⚠️ **This project is under active development.** Interfaces, config keys, and output formats may change without notice. Do not use in production trading systems.
 
-`sigforge` is a CLI for analyzing Binance perpetual futures setups. It does not place trades. It pulls live market data, classifies the current market regime, scores long and short ideas through a multi-stage signal pipeline, builds entry/stop/target geometry, and returns `no trade` when the setup does not clear the final safety gates (confidence < 0.45, R:R < 0.8, quality < 25). Sub-threshold signals are penalized rather than immediately rejected, so marginal setups are scored down rather than silently dropped.
+`sigforge` is a CLI for analyzing perpetual futures setups. It does not place trades. It pulls live market data, classifies the current market regime, scores long and short ideas through a multi-stage signal pipeline, builds entry/stop/target geometry, and returns `no trade` when the setup does not clear the final safety gates (confidence < 0.60, R:R < 0.8, quality < 25). Sub-threshold signals are penalized rather than immediately rejected, so marginal setups are scored down rather than silently dropped.
 
 ## Installation
 
@@ -99,7 +99,7 @@ sigforge history clear
 
 Each setup flows through the same core stages:
 
-1. **Indicator collection** — ATR, ADX, RSI, MACD, Bollinger Bands, VWAP bands, market structure, cumulative delta, liquidity sweeps, volume profile, funding rate, and open interest context
+1. **Indicator collection** — ATR, ADX, RSI, MACD, Bollinger Bands, VWAP bands, EMA20, market structure, cumulative delta, liquidity sweeps, volume profile, funding rate, and open interest context
 2. **Regime classification** — multi-timeframe consensus over higher, context, and trigger timeframes using ADX slope, ATR percentile, and DI bias
 3. **Signal normalization** — 16 side-aware signals mapped into `[0, 1]` via sigmoid and tanh transforms
 4. **Evidence grading** — normalized signals weighted by regime profile to produce a bounded evidence score
@@ -108,9 +108,11 @@ Each setup flows through the same core stages:
 7. **Timeframe alignment scoring** — cross-timeframe trend agreement applied as a confidence multiplier
 8. **Reversal signal detection** — early reversal signals penalize confidence and quality when counter-trend pressure is detected
 9. **Confluence scoring** — entry and target price confluence with structure levels adds quality boosts
-10. **Geometry selection** — stop/target anchors chosen from swing structure, VWAP bands, volume profile, or ATR fallback; structure targets are used directly when they meet the R:R threshold; `rr_enforced` fires only as a last resort
-11. **Quality scoring** — R:R, stop distance, anchor quality, and confluence combined into a `LOW` / `MEDIUM` / `HIGH` label
-12. **Drawdown guard** — per-symbol drawdown state applied before results are saved or ranked
+10. **Geometry selection** — entry anchored to `max(EMA20, nearest swing low)` for longs and `min(EMA20, nearest swing high)` for shorts; stop/target anchors chosen from swing structure, VWAP bands, volume profile, or ATR fallback; stop buffers dynamically scaled by relative volatility (`atr / price × 100`) so volatile assets naturally get wider stops; structure targets used directly; `rr_enforced` fires only as a last resort with a 2.2× minimum R/R
+11. **Long baiter post-processing** — limit-order long setups penalized for candle colour, FOMO conditions (RSI > 65, BB > 0.75), and distance from value anchors (VWAP, VAH, EMA20); penalties are soft and never zero confidence
+12. **Quality scoring** — R:R, stop distance, anchor quality, and confluence combined into a `LOW` / `MEDIUM` / `HIGH` label
+13. **Confidence firewall** — setups with confidence < 0.60 are filtered before recording or execution simulation
+14. **Drawdown guard** — per-symbol drawdown state applied before results are saved or ranked
 
 ## Presets
 
@@ -180,7 +182,7 @@ The configuration has been streamlined to use preset-based organization:
 |---------|-------------|
 | `presets` | Contains complete configurations for `scalper` and `position_trader` |
 | `presets.<name>` | Individual preset with timeframes, filters, and candidate selection |
-| `strategy` | Signal weights, regime weights, logistic params, geometry quality |
+| `strategy` | Signal weights, regime weights, logistic params, geometry quality, long entry filters |
 | `cache` | TTLs for market meta, realtime klines, historical klines |
 | `slippage` | Default model and volatility multipliers |
 | `drawdown` | Lookback window and severity thresholds |
@@ -200,6 +202,8 @@ Key preset fields:
 | `candidate_*` | Symbol selection criteria for `find` command |
 
 All config sections are backward-compatible. Missing keys fall back to built-in defaults.
+
+> **Long entry filters** — `strategy.long_entry_filters.trend_dominance.min_adx_threshold` controls the ADX floor for trend-dominance checks on long setups (default `22.0`). Set `enable_enhanced_filters: true` to activate the full filter suite.
 
 ### Refreshing config mid-session
 
@@ -257,5 +261,6 @@ pytest -q
 
 - Uses live Binance Futures market data — no API key required for public endpoints
 - History stored in `.data/history.db`; override with `FUTURES_ANALYZER_HISTORY_DB`
+- Replay and history recording only accept setups with confidence ≥ 0.60
 - `analyse` is the primary spelling; `analyze` is a compatibility alias
 - Analytical tooling only — not financial advice

@@ -212,6 +212,6 @@ async def find_latest_tradable_chart_timestamp(
             market=replay_market,
             timeframe_plan=timeframe_plan,
         )
-        if result.primary_setup.is_tradable:
+        if result.primary_setup.is_tradable and result.primary_setup.confidence >= 0.60:
             return anchor.astimezone(UTC)
     return None

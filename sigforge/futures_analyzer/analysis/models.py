@@ -217,6 +217,9 @@ class IndicatorBundle:
     order_book_imbalance: float   # [-1, 1]
     bid_ask_spread_pct: float
 
+    # EMA 20 on entry timeframe
+    ema_20: float = 0.0
+
     # Warnings accumulated during computation
     warnings: list[str] = dc_field(default_factory=list)
 

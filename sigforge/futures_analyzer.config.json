@@ -388,7 +388,12 @@
       "max_score": 95.0
     },
     "long_entry_filters": {
-      "enable_enhanced_filters": false
+      "enable_enhanced_filters": false,
+      "trend_dominance": {
+        "min_ema_separation_pct": 1.5,
+        "min_adx_threshold": 22.0,
+        "min_di_margin": 5.0
+      }
     }
   },
   "slippage": {

@@ -1081,8 +1081,11 @@ def compute_all_indicators(
 
 
 
-    # ?????? OI / funding from market_meta ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+    # ── EMA 20 on entry timeframe ─────────────────────────────────────────────
+    entry_closes_for_ema = [c.close for c in entry]
+    ema_20 = _ema_value(entry_closes_for_ema, 20) if entry_closes_for_ema else 0.0
 
+    # ── OI / funding from market_meta ────────────────────────────────────────
     funding_rate = getattr(market_meta, "funding_rate", None)
 
     oi_change_pct = getattr(market_meta, "open_interest_change_pct", None)
@@ -1172,6 +1175,8 @@ def compute_all_indicators(
         order_book_imbalance=order_book_imbalance,
 
         bid_ask_spread_pct=bid_ask_spread_pct,
+
+        ema_20=ema_20,
 
         warnings=warnings_list,
 
@@ -3037,16 +3042,21 @@ class SetupAnalyzer:
         """Post-process a long setup with pullback-baiter logic.
 
         Applied after _build_side. Enforces:
-        - Candle colour gate: green candle = -0.20, red candle = +0.05
+        - Candle colour gate: green candle = -0.10, red candle = +0.05
         - FOMO gate: RSI > 65 or BB > 0.75 = -0.30
-        - Value requirement: price > 0.1 ATR from VWAP AND VAH = confidence → 0
+        - Near Value check: within 0.2 ATR of VWAP, VAH, or 0.15 ATR of EMA20.
+          If NOT near value: apply -0.30 penalty (never zeros confidence).
+        - fallback_risk_reward = 2.2 applied to minimum R/R enforcement.
         - entry_type = 'limit'
         """
-        # Candle colour gate
+        # Candle colour gate — HARD REQUIREMENT: must be a red candle (pullback entry only)
         if trigger_candles:
             last = trigger_candles[-1]
-            if last.close >= last.open:  # green candle
-                setup.confidence = _clamp(setup.confidence - 0.20, 0.0, 1.0)
+            if last.close >= last.open:  # green candle — reject immediately
+                setup.is_tradable = False
+                if "green candle — not a pullback entry" not in setup.tradable_reasons:
+                    setup.tradable_reasons.append("green candle — not a pullback entry")
+                return
             else:  # red candle — price pulling back, add small bonus
                 setup.confidence = _clamp(setup.confidence + 0.05, 0.0, 1.0)
 
@@ -3054,17 +3064,31 @@ class SetupAnalyzer:
         if bundle.rsi_14 > 65 or bundle.bb_position > 0.75:
             setup.confidence = _clamp(setup.confidence - 0.30, 0.0, 1.0)
 
-        # Value requirement: must be within 0.1 ATR of VWAP or VAH
+        # Near Value check — soft penalty when price is extended from all value anchors.
+        # "Near Value" = within 0.2 ATR of VWAP or VAH, OR within 0.15 ATR of EMA20.
         _vwap_dist = abs(px - bundle.vwap)
         _vah_dist = abs(px - bundle.vah)
-        if _vwap_dist > atr * 0.1 and _vah_dist > atr * 0.1:
-            setup.confidence = 0.0
+        _ema20_dist = abs(px - bundle.ema_20) if bundle.ema_20 > 0 else 0.0
+        _near_value = (
+            _vwap_dist < atr * 0.2
+            or _vah_dist < atr * 0.2
+            or _ema20_dist < atr * 0.15
+        )
+        if not _near_value:
+            setup.confidence = _clamp(setup.confidence - 0.30, 0.0, 1.0)
             if "price outside value area" not in setup.tradable_reasons:
-                setup.tradable_reasons.append("price outside value area (> 0.1 ATR from VWAP and VAH)")
-            setup.is_tradable = False
+                setup.tradable_reasons.append(
+                    "price not near value (> 0.2 ATR from VWAP/VAH and > 0.15 ATR from EMA20) — confidence penalised"
+                )
 
         # Mark as limit entry
         setup.entry_type = "limit"
+
+        # Hard confidence gate — lock the door on low-conviction setups
+        if setup.confidence < 0.60:
+            setup.is_tradable = False
+            if "confidence below 0.60 threshold" not in setup.tradable_reasons:
+                setup.tradable_reasons.append("confidence below 0.60 threshold")
 
     def analyze(
 
@@ -4252,6 +4276,8 @@ class SetupAnalyzer:
 
             _swings = find_swing_points(trigger_candles)  # type: ignore[arg-type]
 
+            _symbol = market_meta.symbol if market_meta is not None else ""
+
             _geometry = place_entry_stop_target(
 
                 side,
@@ -4271,6 +4297,8 @@ class SetupAnalyzer:
                 {**mode_params, "min_rr_ratio": self._trade_filter_params().get("min_rr_ratio", 1.5)},
 
                 tick,
+
+                _symbol,
 
             )
 

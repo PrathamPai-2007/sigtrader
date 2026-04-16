@@ -207,6 +207,8 @@ def place_entry_stop_target(
 
     tick: float | None,
 
+    symbol: str = "",
+
 ) -> EntryGeometry:
 
     """Place entry, stop, and target using swing pivots and VWAP anchors.
@@ -220,11 +222,19 @@ def place_entry_stop_target(
     rr_enforced fires ONLY when no structure target exists (atr_cap fallback only).
     SHORT structure targets are capped at 2.5× risk to prevent extreme exits.
     Stops are never modified. Quantizes to tick size. ATR floor: max(atr, px*0.001).
+    Stop buffers are dynamically scaled by relative volatility (atr / price * 100),
+    so volatile assets like ETH naturally get wider stops than stable ones like BTC.
     """
 
     # ATR safety: substitute max(atr, px * 0.001) when ATR is zero
 
     atr = max(atr, px * 0.001)
+
+    # Dynamic volatility-adjusted buffer multiplier.
+    # volatility_ratio = relative ATR as a percentage of price.
+    # dynamic_buffer_mult grows linearly with volatility, keeping risk-to-noise constant.
+    volatility_ratio = (atr / max(px, 1e-9)) * 100.0
+    dynamic_buffer_mult = 0.15 + (volatility_ratio * 0.05)
 
     atr_buffer = atr * mode_params.get("atr_buffer_factor", 0.5)
 
@@ -238,8 +248,16 @@ def place_entry_stop_target(
 
     if side == "long":
 
-        # Bait entry: offset below market price to require a pullback before fill.
-        entry = px - (atr * 0.15)
+        # Entry at max(EMA20, nearest swing low): anchors to structural support.
+        # Falls back to px - 0.08 ATR if neither reference is available or below px.
+        _ema20_ref = bundle.ema_20 if bundle.ema_20 > 0 else 0.0
+        _valid_lows_for_entry = [l for l in swings.recent_lows if l < px]
+        _nearest_swing_low = max(_valid_lows_for_entry) if _valid_lows_for_entry else 0.0
+        _structural_entry = max(_ema20_ref, _nearest_swing_low)
+        if 0 < _structural_entry < px:
+            entry = _structural_entry
+        else:
+            entry = px - (atr * 0.08)
 
         # --- Stop placement (priority order) ---
 
@@ -257,11 +275,11 @@ def place_entry_stop_target(
 
             nearest_low = max(valid_lows)
 
-            sweep_buffer = atr * 0.2
+            sweep_buffer = atr * 0.2 * dynamic_buffer_mult
 
             candidate_stops.append(
 
-                (nearest_low - atr_buffer - sweep_buffer, "swing_low_sweep")
+                (nearest_low - atr_buffer * dynamic_buffer_mult - sweep_buffer, "swing_low_sweep")
 
             )
 
@@ -271,7 +289,7 @@ def place_entry_stop_target(
 
         if bundle.vwap_lower_1sd < entry:
 
-            candidate_stops.append((bundle.vwap_lower_1sd - atr_buffer * 0.5, "vwap_lower"))
+            candidate_stops.append((bundle.vwap_lower_1sd - atr_buffer * 0.5 * dynamic_buffer_mult, "vwap_lower"))
 
 
 
@@ -279,7 +297,7 @@ def place_entry_stop_target(
 
         if bundle.val < entry:
 
-            candidate_stops.append((bundle.val - atr_buffer * 0.5, "val"))
+            candidate_stops.append((bundle.val - atr_buffer * 0.5 * dynamic_buffer_mult, "val"))
 
 
 
@@ -290,6 +308,15 @@ def place_entry_stop_target(
 
 
         stop, stop_anchor = select_best_stop(candidate_stops, entry, atr)
+
+        # Dynamic stop cap for BULLISH_TREND longs:
+        # EMA20 is often far from Swing Low, creating a "Giant Stop" that nukes PnL.
+        # Cap raw stop distance at 1.5 ATR to control risk.
+        if regime == MarketRegime.BULLISH_TREND:
+            raw_stop_dist = entry - stop
+            if raw_stop_dist > atr * 1.5:
+                stop = entry - (atr * 1.5)
+                stop_anchor = "atr_capped_bullish"
 
 
 
@@ -339,7 +366,17 @@ def place_entry_stop_target(
 
 
 
-    else:  # short ??? mirror logic
+    else:  # short — mirror logic
+
+        # Entry at min(EMA20, nearest swing high): anchors to structural resistance.
+        # Falls back to market price if neither reference is available or above px.
+        _ema20_ref_s = bundle.ema_20 if bundle.ema_20 > 0 else float("inf")
+        _valid_highs_for_entry = [h for h in swings.recent_highs if h > px]
+        _nearest_swing_high = min(_valid_highs_for_entry) if _valid_highs_for_entry else float("inf")
+        _structural_entry_s = min(_ema20_ref_s, _nearest_swing_high)
+        if px < _structural_entry_s < float("inf"):
+            entry = _structural_entry_s
+        # else entry stays at px (set above)
 
         # --- Stop placement (priority order) ---
 
@@ -355,7 +392,7 @@ def place_entry_stop_target(
 
             nearest_high = min(valid_highs)
 
-            candidate_stops.append((nearest_high + atr * 0.15, "swing_high"))
+            candidate_stops.append((nearest_high + atr * 0.15 * dynamic_buffer_mult, "swing_high"))
 
 
 
@@ -363,7 +400,7 @@ def place_entry_stop_target(
 
         if bundle.vwap_upper_1sd > entry:
 
-            candidate_stops.append((bundle.vwap_upper_1sd + atr_buffer * 0.5, "vwap_upper"))
+            candidate_stops.append((bundle.vwap_upper_1sd + atr_buffer * 0.5 * dynamic_buffer_mult, "vwap_upper"))
 
 
 
@@ -371,7 +408,7 @@ def place_entry_stop_target(
 
         if bundle.vah > entry:
 
-            candidate_stops.append((bundle.vah + atr_buffer * 0.5, "vah"))
+            candidate_stops.append((bundle.vah + atr_buffer * 0.5 * dynamic_buffer_mult, "vah"))
 
 
 
@@ -440,7 +477,7 @@ def place_entry_stop_target(
     _structure_anchors = {"swing_high_sweep", "swing_high", "swing_low_sweep",
                           "swing_low", "vwap_upper", "vwap_lower", "vah", "val"}
     _has_structure_target = target_anchor in _structure_anchors
-    _long_min_rr = 2.0 if side == "long" else min_rr
+    _long_min_rr = 2.2 if side == "long" else min_rr
     if not _has_structure_target and reward / max(risk, 1e-9) < _long_min_rr:
         if side == "long":
             target = entry + risk * _long_min_rr
