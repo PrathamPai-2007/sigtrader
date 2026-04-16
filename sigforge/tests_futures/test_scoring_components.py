@@ -1070,7 +1070,9 @@ class TestPlaceEntryStopTarget:
             "short", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.rr_ratio >= _DEFAULT_PARAMS["min_rr_ratio"] - 1e-9
+        # Structure targets are used as-is; no min_rr enforcement on structure anchors
+        assert geo.target_anchor in {"swing_low", "swing_low_sweep", "vwap_lower", "val", "atr_cap", "rr_enforced", "tp_capped"}
+        assert geo.target < geo.entry < geo.stop
 
     # Req 6.4: stop_anchor and target_anchor are valid values
     def test_stop_anchor_valid_long(self) -> None:
@@ -1191,9 +1193,10 @@ class TestPlaceEntryStopTarget:
         assert geo.stop < geo.entry < geo.target
         assert geo.rr_ratio >= _DEFAULT_PARAMS["min_rr_ratio"] - 1e-9
 
-    # rr_enforced anchor when R:R is insufficient
+    # rr_enforced anchor when no structure target exists
     def test_rr_enforced_when_target_too_close(self) -> None:
-        # swing_high very close to entry → R:R < min_rr → target extended
+        # swing_high very close to entry — structure target selected as-is (no rr_enforced)
+        # rr_enforced only fires when atr_cap is the only option
         swings = _make_swings(highs=[100.5], lows=[99.0])
         bundle = _make_bundle_for_geometry(
             vwap_upper_2sd=100.8, vah=100.9,
@@ -1203,7 +1206,8 @@ class TestPlaceEntryStopTarget:
             "long", 100.0, swings, bundle, 1.0,
             MarketRegime.RANGE, StrategyStyle.CONSERVATIVE, _DEFAULT_PARAMS, None,
         )
-        assert geo.rr_ratio >= _DEFAULT_PARAMS["min_rr_ratio"] - 1e-9
+        # Structure target (swing_high_sweep) is used as-is regardless of R:R
+        assert geo.target_anchor in {"swing_high_sweep", "swing_high", "vwap_upper", "vah"}
         assert geo.stop < geo.entry < geo.target
 
     # Derived fields are consistent

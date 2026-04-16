@@ -257,6 +257,10 @@ class BacktestRunner:
         printed_first_analysis_error = False
         total = len(candidate_bars)
 
+        # ── LONG pipeline debug log (aggregated, not per-candle) ──────────────
+        from futures_analyzer.analysis.long_pipeline_log import LongPipelineLog
+        _long_log = LongPipelineLog()
+
         for i, trigger_bar in enumerate(candidate_bars):
             if progress and i % 200 == 0:
                 print(f"[backtest] {i}/{total} bars processed, {len(trades)} trades so far")
@@ -286,6 +290,7 @@ class BacktestRunner:
                     higher_candles=higher_sl,
                     market=market,
                     timeframe_plan=tfp,
+                    long_log=_long_log,
                 )
             except Exception as exc:
                 if not printed_first_analysis_error:
@@ -302,6 +307,10 @@ class BacktestRunner:
             if not result.primary_setup.is_tradable:
                 for reason in result.primary_setup.tradable_reasons:
                     rejection_reasons[reason] += 1
+                # Track final LONG rejections that survived all earlier stages
+                if result.primary_setup.side == "long":
+                    for reason in result.primary_setup.tradable_reasons:
+                        _long_log.record_rejected_final(reason)
                 continue
 
             setup = result.primary_setup
@@ -341,6 +350,19 @@ class BacktestRunner:
                 position_size=position_size,
             )
 
+            # ── Side-specific TP cap (execution override) ─────────────────────
+            # For LONG trades, cap the target at entry + risk * tp_rr so we
+            # don't hold for an over-ambitious target.  SHORT keeps its target
+            # unchanged (scaled exit handles SHORT TP via evaluator).
+            _exec = analyzer.get_execution_params(setup.side)
+            _tp_rr = _exec.get("tp_rr")
+            if _tp_rr is not None and setup.side == "long":
+                _risk = abs(trade.entry - trade.stop)
+                if _risk > 0:
+                    _capped_target = trade.entry + _risk * _tp_rr
+                    if _capped_target < trade.target:
+                        trade.target = _capped_target
+
             # Optional slippage adjustment (in-memory, no I/O)
             if self.config.order_size_usd is not None:
                 try:
@@ -373,6 +395,11 @@ class BacktestRunner:
             forward = trigger_candles[bar_idx: bar_idx + eval_window]
             resolve_outcome(trade, forward, evaluation_window=eval_window)
             trades.append(trade)
+            if trade.side == "long":
+                _long_log.record_entered()
+        # ── Print LONG pipeline summary ───────────────────────────────────────
+        print(_long_log.summary())
+
         report = BacktestReport(
             config=self.config,
             trades=trades,

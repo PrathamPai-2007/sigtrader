@@ -19,15 +19,14 @@
       "candidate_kline_interval": "1h",
       "candidate_kline_lookback": 48,
       "candidate_return_weight": 0.45,
-      "candidate_range_weight": 0.40,
+      "candidate_range_weight": 0.4,
       "candidate_consistency_weight": 0.15,
       "fallback_risk_reward": 1.25,
       "ambition_penalty_start_atr": 1.25,
       "ambition_penalty_slope": 0.12,
-      "min_quality": 45.0,
-      "min_rr_ratio": 1.2
+      "min_quality": 40.0,
+      "min_rr_ratio": 1.0
     },
-
     "scalper": {
       "profile_name": "scalper_core",
       "entry_timeframe": "1m",
@@ -37,7 +36,7 @@
       "lookback_bars": 300,
       "target_cap_atr_mult": 2.5,
       "min_confidence": 0.44,
-      "max_confidence": 0.80,
+      "max_confidence": 0.8,
       "max_stop_distance_pct": 2.5,
       "min_evidence_agreement": 4,
       "min_evidence_edge": 1,
@@ -46,24 +45,22 @@
       "candidate_pool_limit": 25,
       "candidate_kline_interval": "15m",
       "candidate_kline_lookback": 96,
-      "candidate_return_weight": 0.60,
+      "candidate_return_weight": 0.6,
       "candidate_range_weight": 0.25,
       "candidate_consistency_weight": 0.15,
       "fallback_risk_reward": 1.5,
       "ambition_penalty_start_atr": 1.0,
       "ambition_penalty_slope": 0.15,
       "min_quality": 28.0,
-      "min_rr_ratio": 1.5
+      "min_rr_ratio": 0.6
     }
   },
-
   "cache": {
     "market_meta_ttl_seconds": 12.0,
     "realtime_klines_ttl_seconds": 20.0,
     "historical_klines_ttl_seconds": 3600.0,
     "replay_lookback_cap": 96
   },
-
   "strategy": {
     "pressure_threshold": 0.05,
     "volume_surge_threshold": 1.05,
@@ -73,7 +70,16 @@
       "bearish_trend",
       "bullish_trend"
     ],
-
+    "execution_overrides": {
+      "long": {
+        "min_rr_ratio": 1.0,
+        "min_quality": 40.0
+      },
+      "short": {
+        "min_rr_ratio": 1.0,
+        "min_quality": 45.0
+      }
+    },
     "signal_transforms": {
       "higher_trend_scale": 10.0,
       "context_trend_scale": 10.0,
@@ -81,7 +87,7 @@
       "entry_momentum_scale": 15.0,
       "buy_pressure_scale": 5.0,
       "funding_momentum_scale": 5.0,
-      "macd_histogram_scale": 100.0,
+      "macd_histogram_scale": 250.0,
       "vwap_dev_scale": 20.0,
       "volume_surge_cap": 2.0,
       "oi_funding_norm": 0.5,
@@ -89,7 +95,6 @@
       "trend_tanh_scale": 100.0,
       "momentum_tanh_scale": 50.0
     },
-
     "indicator_params": {
       "ema_fast_period": 20,
       "ema_slow_period": 50,
@@ -98,7 +103,6 @@
       "atr_period": 14,
       "pivot_n": 2
     },
-
     "regime_classifier": {
       "adx_trend_threshold": 25.0,
       "adx_weak_threshold": 20.0,
@@ -106,7 +110,7 @@
       "atr_trend_max_percentile": 75.0,
       "adx_slope_exhaustion": -2.0,
       "adx_slope_breakout": 3.0,
-      "consensus_weight_higher": 0.50,
+      "consensus_weight_higher": 0.5,
       "consensus_weight_context": 0.35,
       "consensus_weight_trigger": 0.15,
       "adx_conf_base": 0.5,
@@ -115,26 +119,24 @@
       "adx_conf_adx_range": 60.0,
       "di_bias_margin": 1.1
     },
-
     "default_signal_weights": {
-      "higher_trend":          0.13,
-      "context_trend":         0.10,
-      "trigger_momentum":      0.09,
-      "entry_momentum":        0.07,
-      "volume_surge":          0.05,
-      "buy_pressure":          0.07,
-      "oi_funding_bias":       0.05,
-      "funding_momentum":      0.04,
-      "structure_position":    0.06,
-      "rsi_alignment":         0.05,
-      "macd_alignment":        0.05,
-      "bb_alignment":          0.04,
-      "vwap_alignment":        0.06,
+      "higher_trend": 0.13,
+      "context_trend": 0.1,
+      "trigger_momentum": 0.09,
+      "entry_momentum": 0.07,
+      "volume_surge": 0.05,
+      "buy_pressure": 0.07,
+      "oi_funding_bias": 0.05,
+      "funding_momentum": 0.04,
+      "structure_position": 0.06,
+      "rsi_alignment": 0.05,
+      "macd_alignment": 0.05,
+      "bb_alignment": 0.04,
+      "vwap_alignment": 0.06,
       "market_structure_align": 0.07,
       "cumulative_delta_align": 0.05,
-      "volume_poc_proximity":  0.07
+      "volume_poc_proximity": 0.07
     },
-
     "regime_gate_thresholds": {
       "trend": 0.4,
       "breakout": 0.3,
@@ -143,64 +145,83 @@
       "volatile_chop": 0.5,
       "transition": 0.35
     },
-
     "logistic_params": {
-      "range_long":  { "steepness": 12.0, "midpoint": 0.5 },
-      "range_short": { "steepness": 12.0, "midpoint": 0.5 },
-      "bullish_trend_long":  { "steepness": 9.0, "midpoint": 0.5 },
-      "bullish_trend_short": { "steepness": 14.0, "midpoint": 0.5 },
-      "bearish_trend_short": { "steepness": 9.0, "midpoint": 0.5 },
-      "bearish_trend_long":  { "steepness": 14.0, "midpoint": 0.5 },
-      "default":     { "steepness": 12.0, "midpoint": 0.5 }
-    },
-
-    "regime_weights": {
-      "default": {
-        "higher_trend":          0.13,
-        "context_trend":         0.10,
-        "trigger_momentum":      0.09,
-        "entry_momentum":        0.07,
-        "volume_surge":          0.05,
-        "buy_pressure":          0.07,
-        "oi_funding_bias":       0.05,
-        "funding_momentum":      0.04,
-        "structure_position":    0.06,
-        "rsi_alignment":         0.05,
-        "macd_alignment":        0.05,
-        "bb_alignment":          0.04,
-        "vwap_alignment":        0.06,
-        "market_structure_align": 0.07,
-        "cumulative_delta_align": 0.05,
-        "volume_poc_proximity":  0.07
+      "range_long": {
+        "steepness": 12.0,
+        "midpoint": 0.5
+      },
+      "range_short": {
+        "steepness": 12.0,
+        "midpoint": 0.5
       },
       "bullish_trend_long": {
-        "higher_trend": 0.22,
-        "context_trend": 0.16,
-        "trigger_momentum": 0.12,
-        "entry_momentum": 0.10,
+        "steepness": 10.0,
+        "midpoint": 0.62
+      },
+      "bullish_trend_short": {
+        "steepness": 14.0,
+        "midpoint": 0.65
+      },
+      "bearish_trend_short": {
+        "steepness": 5.5,
+        "midpoint": 0.48
+      },
+      "bearish_trend_long": {
+        "steepness": 14.0,
+        "midpoint": 0.5
+      },
+      "default": {
+        "steepness": 12.0,
+        "midpoint": 0.5
+      }
+    },
+    "regime_weights": {
+      "default": {
+        "higher_trend": 0.13,
+        "context_trend": 0.1,
+        "trigger_momentum": 0.09,
+        "entry_momentum": 0.07,
         "volume_surge": 0.05,
-        "buy_pressure": 0.08,
+        "buy_pressure": 0.07,
+        "oi_funding_bias": 0.05,
+        "funding_momentum": 0.04,
+        "structure_position": 0.06,
+        "rsi_alignment": 0.05,
+        "macd_alignment": 0.05,
+        "bb_alignment": 0.04,
+        "vwap_alignment": 0.06,
+        "market_structure_align": 0.07,
+        "cumulative_delta_align": 0.05,
+        "volume_poc_proximity": 0.07
+      },
+      "bullish_trend_long": {
+        "higher_trend": 0.18,
+        "context_trend": 0.05,
+        "trigger_momentum": 0.07,
+        "entry_momentum": 0.05,
+        "volume_surge": 0.05,
+        "buy_pressure": 0.07,
         "oi_funding_bias": 0.04,
         "funding_momentum": 0.03,
-        "structure_position": 0.04,
-        "rsi_alignment": 0.04,
+        "structure_position": 0.12,
+        "rsi_alignment": 0.05,
         "macd_alignment": 0.04,
-        "bb_alignment": 0.02,
+        "bb_alignment": 0.05,
         "vwap_alignment": 0.02,
         "market_structure_align": 0.02,
         "cumulative_delta_align": 0.01,
-        "volume_poc_proximity": 0.01
+        "volume_poc_proximity": 0.15
       },
       "bullish_trend_short": {
         "higher_trend": 0.06,
         "context_trend": 0.08,
-        "trigger_momentum": 0.10,
-        "entry_momentum": 0.10,
+        "trigger_momentum": 0.1,
+        "entry_momentum": 0.1,
         "volume_surge": 0.06,
         "buy_pressure": 0.06,
         "oi_funding_bias": 0.08,
         "funding_momentum": 0.08,
-        "structure_position": 0.10,
+        "structure_position": 0.1,
         "rsi_alignment": 0.08,
         "macd_alignment": 0.06,
         "bb_alignment": 0.04,
@@ -210,33 +231,33 @@
         "volume_poc_proximity": 0.01
       },
       "bearish_trend_short": {
-        "higher_trend": 0.22,
-        "context_trend": 0.16,
-        "trigger_momentum": 0.12,
-        "entry_momentum": 0.10,
+        "higher_trend": 0.05,
+        "context_trend": 0.05,
+        "trigger_momentum": 0.08,
+        "entry_momentum": 0.03,
         "volume_surge": 0.05,
         "buy_pressure": 0.08,
         "oi_funding_bias": 0.04,
         "funding_momentum": 0.03,
-        "structure_position": 0.04,
-        "rsi_alignment": 0.04,
+        "structure_position": 0.12,
+        "rsi_alignment": 0.15,
         "macd_alignment": 0.04,
-        "bb_alignment": 0.02,
+        "bb_alignment": 0.15,
         "vwap_alignment": 0.02,
         "market_structure_align": 0.02,
         "cumulative_delta_align": 0.01,
-        "volume_poc_proximity": 0.01
+        "volume_poc_proximity": 0.08
       },
       "bearish_trend_long": {
         "higher_trend": 0.06,
         "context_trend": 0.08,
-        "trigger_momentum": 0.10,
-        "entry_momentum": 0.10,
+        "trigger_momentum": 0.1,
+        "entry_momentum": 0.1,
         "volume_surge": 0.06,
         "buy_pressure": 0.06,
         "oi_funding_bias": 0.08,
         "funding_momentum": 0.08,
-        "structure_position": 0.10,
+        "structure_position": 0.1,
         "rsi_alignment": 0.08,
         "macd_alignment": 0.06,
         "bb_alignment": 0.04,
@@ -264,7 +285,7 @@
         "volume_poc_proximity": 0.06
       },
       "breakout": {
-        "higher_trend": 0.10,
+        "higher_trend": 0.1,
         "context_trend": 0.08,
         "trigger_momentum": 0.15,
         "entry_momentum": 0.12,
@@ -301,7 +322,7 @@
       },
       "transition": {
         "higher_trend": 0.12,
-        "context_trend": 0.10,
+        "context_trend": 0.1,
         "trigger_momentum": 0.09,
         "entry_momentum": 0.08,
         "volume_surge": 0.06,
@@ -315,15 +336,13 @@
         "vwap_alignment": 0.05,
         "market_structure_align": 0.04,
         "cumulative_delta_align": 0.04,
-        "volume_poc_proximity": 0.00
+        "volume_poc_proximity": 0.0
       }
     },
-
     "regime_penalty_multiplier": {
       "default": 2.0,
       "volatile_chop": 2.8
     },
-
     "regime_confidence_ceiling": {
       "default": 1.0,
       "bullish_trend_short": 0.92,
@@ -331,22 +350,26 @@
       "range": 0.84,
       "volatile_chop": 0.62
     },
-
     "regime_alignment": {
       "range": 0.25,
       "bullish_trend_long": 0.9,
       "bearish_trend_short": 0.9
     },
-
     "regime_penalty": {
       "volatile_chop": 0.4,
       "bullish_trend_short": 0.4,
       "bearish_trend_long": 0.4
     },
-
-    "leverage_caps":   { "low": 2, "medium": 4, "high": 6 },
-    "leverage_floors": { "low": 2, "medium": 2, "high": 3 },
-
+    "leverage_caps": {
+      "low": 2,
+      "medium": 4,
+      "high": 6
+    },
+    "leverage_floors": {
+      "low": 2,
+      "medium": 2,
+      "high": 3
+    },
     "geometry_quality": {
       "rr_weight": 20.0,
       "rr_cap": 3.0,
@@ -363,9 +386,11 @@
       "base_score": 20.0,
       "min_score": 10.0,
       "max_score": 95.0
+    },
+    "long_entry_filters": {
+      "enable_enhanced_filters": false
     }
   },
-
   "slippage": {
     "volatility_multipliers": {
       "low": 0.7,
@@ -376,7 +401,6 @@
     "default_model": "moderate",
     "min_viable_rr": 1.0
   },
-
   "drawdown": {
     "lookback": 10,
     "mild_threshold_pct": 5.0,
@@ -386,36 +410,48 @@
     "moderate_consecutive_losses": 3,
     "severe_consecutive_losses": 5
   },
-
   "portfolio": {
-    "max_position_pct": 0.20,
+    "max_position_pct": 0.2,
     "max_risk_per_trade_pct": 0.02,
-    "max_cluster_risk_pct": 0.10,
+    "max_cluster_risk_pct": 0.1,
     "max_total_risk_pct": 0.06,
     "kelly_fraction": 0.25,
     "min_history_for_kelly": 10
   },
-
   "entry_filters": {
     "enable_confirmation": true,
     "confirmation_candles": 1,
     "short_confirmation": {
       "type": "momentum_loss"
     }
-  },  
-  
+  },
   "position_sizing": {
     "mode": "confidence_scaled",
     "base_size": 1.0,
     "max_position_size": 1.5,
     "confidence_tiers": [
-      { "min": 0.65, "max": 0.70, "multiplier": 0.75 },
-      { "min": 0.70, "max": 0.80, "multiplier": 1.0 },
-      { "min": 0.80, "max": 0.90, "multiplier": 1.25 },
-      { "min": 0.90, "max": 1.00, "multiplier": 1.5 }
+      {
+        "min": 0.65,
+        "max": 0.7,
+        "multiplier": 0.75
+      },
+      {
+        "min": 0.7,
+        "max": 0.8,
+        "multiplier": 1.0
+      },
+      {
+        "min": 0.8,
+        "max": 0.9,
+        "multiplier": 1.25
+      },
+      {
+        "min": 0.9,
+        "max": 1.0,
+        "multiplier": 1.5
+      }
     ]
   },
-
   "exit": {
     "mode": "scaled",
     "range": {
@@ -426,9 +462,87 @@
       "move_stop_to_be_after_tp1": true
     },
     "trend": {
-      "tp_rr": 1.2
+      "tp_rr": 1.0
     }
   },
-
-  "find_fallback_top": 3
+  "find_fallback_top": 3,
+  "market_modes": {
+    "intraday": {
+      "profile_name": "intraday_core",
+      "entry_timeframe": "5m",
+      "trigger_timeframe": "15m",
+      "context_timeframe": "1h",
+      "higher_timeframe": "4h",
+      "lookback_bars": 600
+    },
+    "long_term": {
+      "profile_name": "long_term_swing",
+      "entry_timeframe": "1h",
+      "trigger_timeframe": "4h",
+      "context_timeframe": "1d",
+      "higher_timeframe": "1w",
+      "lookback_bars": 900
+    }
+  },
+  "market_mode_tuning": {
+    "intraday": {
+      "target_cap_atr_mult": 1.9,
+      "min_confidence": 0.56,
+      "max_confidence": 0.86,
+      "max_stop_distance_pct": 2.0,
+      "min_evidence_agreement": 2,
+      "min_evidence_edge": 0,
+      "candidate_quote_asset": "USDT",
+      "candidate_min_quote_volume": 25000000.0,
+      "candidate_pool_limit": 40,
+      "candidate_kline_interval": "1h",
+      "candidate_kline_lookback": 48,
+      "candidate_return_weight": 0.45,
+      "candidate_range_weight": 0.4,
+      "candidate_consistency_weight": 0.15
+    },
+    "long_term": {
+      "target_cap_atr_mult": 4.8,
+      "min_confidence": 0.5,
+      "max_stop_distance_pct": 2.0,
+      "min_evidence_agreement": 4,
+      "min_evidence_edge": 1,
+      "candidate_quote_asset": "USDT",
+      "candidate_min_quote_volume": 40000000.0,
+      "candidate_pool_limit": 30,
+      "candidate_kline_interval": "1d",
+      "candidate_kline_lookback": 14,
+      "candidate_return_weight": 0.55,
+      "candidate_range_weight": 0.15,
+      "candidate_consistency_weight": 0.3
+    }
+  },
+  "styles": {
+    "conservative": {
+      "fallback_risk_reward": 1.0,
+      "target_cap_atr_mult": 1.2,
+      "ambition_penalty_start_atr": 1.25,
+      "ambition_penalty_slope": 0.12,
+      "min_confidence": 0.55,
+      "max_confidence": 1.0,
+      "min_quality": 48.0,
+      "min_rr_ratio": 1.0,
+      "max_stop_distance_pct": 0.8,
+      "min_evidence_agreement": 2,
+      "min_evidence_edge": 1
+    },
+    "aggressive": {
+      "fallback_risk_reward": 2.5,
+      "target_cap_atr_mult": 3.5,
+      "ambition_penalty_start_atr": 2.5,
+      "ambition_penalty_slope": 0.06,
+      "min_confidence": 0.5,
+      "max_confidence": 1.0,
+      "min_quality": 48.0,
+      "min_rr_ratio": 1.0,
+      "max_stop_distance_pct": 2.5,
+      "min_evidence_agreement": 4,
+      "min_evidence_edge": 1
+    }
+  }
 }

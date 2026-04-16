@@ -179,6 +179,42 @@ MINIMAL_CONFIG: dict = {
             "min_score": 10.0,
             "max_score": 95.0,
         },
+        "long_entry_filters": {
+            "enable_enhanced_filters": true,
+            "momentum_expansion": {
+                "min_momentum_threshold": 0.15,
+                "min_volume_surge": 1.3
+            },
+            "delayed_entry": {
+                "min_confirmation_candles": 1,
+                "max_confirmation_candles": 3,
+                "min_price_continuation_pct": 0.1,
+                "min_momentum_sustain": 0.1
+            },
+            "structure_confirmation": {
+                "min_volume_expansion": 1.5,
+                "higher_high_buffer_pct": 0.001,
+                "min_confirmations_required": 2
+            },
+            "trend_dominance": {
+                "min_ema_separation_pct": 1.5,
+                "min_adx_threshold": 25.0,
+                "min_di_margin": 5.0
+            },
+            "pullback_trap": {
+                "short_term_momentum_threshold": 0.02,
+                "higher_tf_bearish_threshold": -0.01,
+                "min_momentum_divergence": 0.03
+            },
+            "confidence_adjustments": {
+                "base_long_penalty": 0.15,
+                "weak_trend_penalty": 0.20,
+                "momentum_divergence_penalty": 0.15,
+                "no_confirmation_penalty": 0.25,
+                "bearish_regime_penalty": 0.25,
+                "volatile_chop_penalty": 0.20
+            }
+        },
     },
     "styles": {
         "conservative": {

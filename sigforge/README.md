@@ -2,7 +2,7 @@
 
 > ⚠️ **This project is under active development.** Interfaces, config keys, and output formats may change without notice. Do not use in production trading systems.
 
-`sigforge` is a CLI for analyzing Binance perpetual futures setups. It does not place trades. It pulls live market data, classifies the current market regime, scores long and short ideas through a multi-stage signal pipeline, builds entry/stop/target geometry, and returns `no trade` when the setup does not clear the configured filters.
+`sigforge` is a CLI for analyzing Binance perpetual futures setups. It does not place trades. It pulls live market data, classifies the current market regime, scores long and short ideas through a multi-stage signal pipeline, builds entry/stop/target geometry, and returns `no trade` when the setup does not clear the final safety gates (confidence < 0.45, R:R < 0.8, quality < 25). Sub-threshold signals are penalized rather than immediately rejected, so marginal setups are scored down rather than silently dropped.
 
 ## Installation
 
@@ -78,8 +78,6 @@ sigforge history clear
 
 ## Features
 
-## Features
-
 - Multi-timeframe analysis across entry, trigger, context, and higher timeframes
 - Seven-state regime model: `bullish_trend`, `bearish_trend`, `range`, `volatile_chop`, `breakout`, `exhaustion`, `transition`
 - Normalized 16-signal scoring pipeline with logistic confidence mapping
@@ -110,7 +108,7 @@ Each setup flows through the same core stages:
 7. **Timeframe alignment scoring** — cross-timeframe trend agreement applied as a confidence multiplier
 8. **Reversal signal detection** — early reversal signals penalize confidence and quality when counter-trend pressure is detected
 9. **Confluence scoring** — entry and target price confluence with structure levels adds quality boosts
-10. **Geometry selection** — stop/target anchors chosen from swing structure, VWAP bands, volume profile POC, or ATR fallback
+10. **Geometry selection** — stop/target anchors chosen from swing structure, VWAP bands, volume profile, or ATR fallback; structure targets are used directly when they meet the R:R threshold; `rr_enforced` fires only as a last resort
 11. **Quality scoring** — R:R, stop distance, anchor quality, and confluence combined into a `LOW` / `MEDIUM` / `HIGH` label
 12. **Drawdown guard** — per-symbol drawdown state applied before results are saved or ranked
 
@@ -140,7 +138,7 @@ Each preset contains its complete configuration including:
 `analyse` and related commands expose full setup metadata:
 
 - `confidence`, `quality_score`, `quality_label` (`LOW` / `MEDIUM` / `HIGH`)
-- `stop_anchor` and `target_anchor` (swing, vwap, volume_profile, atr)
+- `stop_anchor` and `target_anchor` (swing, vwap, volume_profile, atr, tp_capped)
 - `regime_state`
 - `signal_strengths` — per-signal normalized values
 - `evidence_weighted_sum` and `logistic_input`
@@ -151,12 +149,6 @@ Each preset contains its complete configuration including:
 - `tradable_reasons` — list of filter failures when `is_tradable` is false
 
 All commands support `--json` for machine-readable output and `--export <file.html|.md|.txt>` for saved reports.
-
-## Config
-
-`sigforge` auto-loads `futures_analyzer.config.json` from the working directory. If the file does not exist, a minimal valid config is written automatically.
-
-Config is loaded **once per CLI invocation** and cached for the duration of the run. Every load prints `[CONFIG] Loaded from <path> at <timestamp>` so you always know which file is active.
 
 ## Config
 

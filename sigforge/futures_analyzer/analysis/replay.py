@@ -183,8 +183,10 @@ async def find_latest_tradable_chart_timestamp(
 
     for trigger_candle in reversed(candidate_bars):
         anchor = trigger_candle.close_time
-        entry_slice = _slice_to_anchor(entry_candles, entry_closes, anchor, timeframe_plan.lookback_bars)
-        trigger_slice = _slice_to_anchor(trigger_candles, trigger_closes, anchor, timeframe_plan.lookback_bars)
+        # Longs need 50% more structural history to confirm the higher-timeframe trend.
+        _long_lookback = int(timeframe_plan.lookback_bars * 1.5)
+        entry_slice = _slice_to_anchor(entry_candles, entry_closes, anchor, _long_lookback)
+        trigger_slice = _slice_to_anchor(trigger_candles, trigger_closes, anchor, _long_lookback)
         context_slice = _slice_to_anchor(context_candles, context_closes, anchor, timeframe_plan.lookback_bars)
         higher_slice = _slice_to_anchor(higher_candles, higher_closes, anchor, timeframe_plan.lookback_bars)
         if min(len(entry_slice), len(trigger_slice), len(context_slice), len(higher_slice)) < _MIN_BARS_PER_TIMEFRAME:

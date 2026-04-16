@@ -1,176 +1,326 @@
-# Scorer.py Decomposition Guide
+# Scorer.py Decomposition Plan (Revised & Safe)
 
-This document describes how to safely decompose `scorer.py` (~3000 lines) into modular components.
+This document outlines a **safe, dependency-aware refactor plan** to decompose `scorer.py` (~3000 lines) into modular components **without changing behavior**.
 
-## Current Structure
+---
 
-The file contains these logical sections:
+# 🎯 Goals
 
-### 1. Data Models (Lines 1-170)
-- `IndicatorBundle` - all indicator data
-- `NormalizedSignals` - normalized [0,1] signals
-- `EvidenceVector` - weighted evidence results
-- `SwingPoints` - swing high/low data
-- `EntryGeometry` - entry/stop/target geometry
-- `_Contribution` - signal contribution details
-- `_EvidenceSnapshot` - evidence state snapshot
-- `_SideMetrics` - complete side metrics data
+* Improve readability and maintainability
+* Eliminate duplicated logic
+* Enable future long/short pipeline separation
+* Preserve 100% backward compatibility
+* Avoid breaking existing backtests
 
-### 2. Geometry Functions (Lines 166-450)
-- `find_swing_points()` - find swing pivots
-- `select_best_stop()` - select optimal stop
-- `select_best_target()` - select optimal target
-- `place_entry_stop_target()` - complete geometry placement
-- `geometry_quality_score()` - score geometry quality
+---
 
-### 3. Signal Processing (Lines 525-640)
-- `normalize_signals()` - convert raw indicators to [0,1]
-- `_oi_funding_biases()` - funding bias calculation
+# ⚠️ Core Principles
 
-### 4. Evidence Computation (Lines 640-740)
-- `compute_graded_evidence()` - weighted evidence scoring
-- `_regime_weight_profile()` - regime-specific weights
-- `_regime_alignment()` - regime alignment
-- `_regime_penalty()` - regime penalties
+1. **NO logic changes during decomposition**
+2. **Move code, don’t rewrite it**
+3. **Preserve function signatures exactly**
+4. **Use re-exports to maintain API**
+5. **Test after every phase**
 
-### 5. Confidence Mapping (Lines 742-790)
-- `logistic_confidence()` - logistic sigmoid mapping
-- `logistic_confidence_from_config()` - config wrapper
+---
 
-### 6. Indicator Computation (Lines 790-1060)
-- `_compute_atr()` - ATR calculation
-- `_ema_value()` - EMA calculation
-- `compute_all_indicators()` - master indicator computation
+# 🧱 Correct Dependency Order
 
-### 7. Utility Functions (Lines 1060-1130)
-- `build_timeframe_plan()` - timeframe configuration
-- Various small helpers
+Modules must be extracted in this order to avoid circular imports:
 
-### 8. Helper Functions (Lines 1132-1455)
-- `_clamp()` - value clamping
-- `_atr()` - ATR (duplicate?)
-- `_structure()` - support/resistance
-- `_momentum()` - momentum calculation
-- `_trend_strength()` - trend measurement
-- `_volume_surge_ratio()` - volume surge detection
-- `_buy_sell_pressure()` - pressure calculation
-- `_range_span()` - range measurement
-- `_volume_divergence_penalties()` - divergence detection
-- `_confirmation_penalty()` - confirmation scoring
-- `_funding_momentum()` - funding rate momentum
-- `_classify_regime()` - regime classification
-- `_quantize()` - price quantization
-- `_quality_label()` - quality labeling
-- `_quality_score_cap_from_confidence()` - quality cap
-- `_leverage_suggestion()` - leverage recommendation
-- `_calculate_enhanced_metrics()` - enhanced metrics
+```
+utils
+  ↓
+indicators
+  ↓
+normalization
+  ↓
+evidence
+  ↓
+confidence
+  ↓
+geometry
+  ↓
+quality
+  ↓
+filters
+  ↓
+setup_analyzer
+  ↓
+scorer (re-export layer)
+```
 
-### 9. Scoring Pipeline Helpers (Lines 1516-1790)
-- `_contributor_catalog()` - signal contributor metadata
-- `_to_contributor_details()` - contributor formatting
-- `_timeframe_alignment_score()` - cross-timeframe scoring
-- `_detect_early_reversal_signals()` - reversal detection
-- `_apply_reversal_penalty()` - reversal penalties
-- `_round_number_proximity()` - round number detection
-- `_score_confluence()` - confluence scoring
-- `_apply_confluence_boost()` - confluence boosts
+---
 
-### 10. SetupAnalyzer Class (Lines 1820-3001)
-- `__init__()` - initialization
-- `_mode_params()` - mode-specific parameters
-- `_trade_filter_params()` - filter configuration
-- `_trade_filter_reasons()` - filter failure reasons
-- `analyze()` - main analysis orchestrator
-- `_build_setup()` - setup construction
-- `_apply_deliberation()` - deliberation logic
-- `_apply_enhanced_metrics_boost()` - metric boosts
+# 🔥 Phase 0 — Deduplication (MANDATORY)
 
-## Safe Decomposition Strategy
+Before splitting anything:
 
-### Phase 1: Extract Pure Functions (No Dependencies)
-These functions have no dependencies on other scorer.py functions:
-1. `_clamp()` - can move to a `utils.py` module
-2. `_quantize()` - can move to `utils.py`
-3. `_quality_label()` - can move to `utils.py`
+### Remove duplicate logic:
 
-### Phase 2: Extract Geometry Module
-Create `geometry.py` with:
-- All geometry-related functions
-- Import `_clamp` and `_quantize` from utils
+* `_compute_atr` vs `_atr`
+* Any duplicate EMA / clamp / quantize logic
+* Ensure only ONE implementation exists per function
 
-### Phase 3: Extract Indicator Module  
-Create `indicators_scorer.py` with:
-- Indicator computation functions
-- Import what they need from geometry/utils
+### Ensure:
 
-### Phase 4: Extract Normalization Module
-Create `normalization.py`:
-- Signal normalization logic
-- Depends on indicators and config
+* `_clamp`, `_quantize`, `_quality_label` are single-source
+* No shadowed or redundant helpers
 
-### Phase 5: Extract Evidence Module
-Create `evidence.py`:
-- Evidence computation
-- Depends on normalization
+---
 
-### Phase 6: Extract SetupAnalyzer
-Create `setup_analyzer.py`:
-- Import from all above modules
-- Contains orchestration logic only
+# 📦 Phase 1 — utils.py
 
-### Phase 7: Create Re-exports
-Update `scorer.py` to re-export everything for backward compatibility
+Extract pure helper functions:
 
-## Testing Strategy
+* `_clamp`
+* `_quantize`
+* `_quality_label`
+* `_quality_score_cap_from_confidence`
+
+✅ No dependencies
+✅ Safest first step
+
+---
+
+# 📊 Phase 2 — indicators.py
+
+Move all indicator computation logic:
+
+* `compute_all_indicators`
+* `_compute_atr`
+* `_ema_value`
+* `_funding_momentum`
+* `_oi_funding_biases`
+* VWAP, RSI, MACD helpers
+
+Depends on:
+
+* utils
+* config
+
+---
+
+# 📉 Phase 3 — normalization.py
+
+Move signal normalization:
+
+* `normalize_signals`
+
+Depends on:
+
+* indicators
+* utils
+* config
+
+---
+
+# 🧠 Phase 4 — evidence.py
+
+Move evidence computation:
+
+* `compute_graded_evidence`
+* `_regime_weight_profile`
+* `_regime_alignment`
+* `_regime_penalty`
+
+Depends on:
+
+* normalization
+* config
+
+---
+
+# 📈 Phase 5 — confidence.py
+
+Move logistic mapping:
+
+* `logistic_confidence`
+* `logistic_confidence_from_config`
+
+Depends on:
+
+* evidence
+* config
+
+---
+
+# 📐 Phase 6 — geometry.py
+
+Move all entry/stop/target logic:
+
+* `find_swing_points`
+* `select_best_stop`
+* `select_best_target`
+* `place_entry_stop_target`
+
+⚠️ Important:
+
+* Geometry depends on indicators (ATR, VWAP, structure)
+
+Depends on:
+
+* indicators
+* utils
+* config
+
+---
+
+# ⭐ Phase 7 — quality.py
+
+Move scoring logic:
+
+* `geometry_quality_score`
+
+Depends on:
+
+* geometry
+* config
+
+---
+
+# 🚫 Phase 8 — filters.py
+
+Move trade gating logic:
+
+* `_trade_filter_params`
+* `_trade_filter_reasons`
+* execution thresholds
+* RR / quality checks
+
+Depends on:
+
+* geometry
+* evidence
+* config
+
+---
+
+# 🧩 Phase 9 — setup_analyzer (CRITICAL SPLIT)
+
+Break the large class into multiple files:
+
+```
+setup_analyzer/
+    ├── analyzer.py          # main class
+    ├── builder.py           # _build_setup
+    ├── deliberation.py      # _apply_deliberation
+    ├── filters.py           # filter logic
+```
+
+Goal:
+
+* Each file < 500 lines
+* Clear separation of responsibilities
+
+---
+
+# 🔁 Phase 10 — scorer.py (RE-EXPORT LAYER)
+
+Final file should only contain:
+
+```python
+from .utils import *
+from .indicators import *
+from .normalization import *
+from .evidence import *
+from .confidence import *
+from .geometry import *
+from .quality import *
+from .filters import *
+from .setup_analyzer import SetupAnalyzer
+```
+
+✅ Ensures backward compatibility
+✅ No breaking imports
+
+---
+
+# 🧪 Testing Strategy
 
 After EACH phase:
-1. Run `pytest -q` to ensure no regressions
-2. Test a few manual cases if possible
-3. Verify imports work correctly
 
-## Risks to Avoid
+1. Run:
 
-1. **Circular imports**: Carefully manage import dependencies
-2. **Breaking changes**: Maintain exact API compatibility via re-exports
-3. **Logic changes**: Don't modify any logic during extraction
-4. **Missing functions**: Ensure all functions are accounted for
+   ```
+   pytest -q
+   ```
 
-## Recommended Order
+2. Run a small backtest:
 
-Based on dependencies:
-```
-utils.py (pure helpers)
-  ↑
-geometry.py (uses utils)
-  ↑
-indicators_scorer.py (uses utils, geometry)
-  ↑
-normalization.py (uses indicators_scorer)
-  ↑
-evidence.py (uses normalization)
-  ↑
-confidence.py (uses evidence)
-  ↑
-quality.py (uses geometry, evidence)
-  ↑
-filters.py (uses all above)
-  ↑
-setup_analyzer.py (orchestrates everything)
-  ↑
-scorer.py (re-exports for backward compat)
-```
+   * Compare trade count
+   * Compare PnL
+   * Compare rejection reasons
 
-## File Size Targets
+3. Verify:
 
-- `utils.py`: ~100 lines
-- `geometry.py`: ~350 lines
-- `indicators_scorer.py`: ~250 lines
-- `normalization.py`: ~200 lines
-- `evidence.py`: ~180 lines
-- `confidence.py`: ~100 lines
-- `quality.py`: ~150 lines
-- `filters.py`: ~400 lines
-- `setup_analyzer.py`: ~800 lines
-- `scorer.py`: ~50 lines (re-exports only)
+   * No missing imports
+   * No circular dependencies
 
-Total: ~2580 lines (vs current 3001, some cleanup expected)
+---
+
+# 🚨 Risks to Avoid
+
+### ❌ Do NOT:
+
+* Modify logic
+* Change thresholds
+* Touch config behavior
+* Refactor AND optimize at the same time
+
+---
+
+### ⚠️ Watch for:
+
+* Circular imports
+* Hidden dependencies
+* Implicit shared state
+
+---
+
+# 📏 Target File Sizes
+
+| Module           | Target Size          |
+| ---------------- | -------------------- |
+| utils.py         | ~100 lines           |
+| indicators.py    | ~250 lines           |
+| normalization.py | ~200 lines           |
+| evidence.py      | ~180 lines           |
+| confidence.py    | ~100 lines           |
+| geometry.py      | ~350 lines           |
+| quality.py       | ~150 lines           |
+| filters.py       | ~400 lines           |
+| setup_analyzer   | ~600–800 lines total |
+| scorer.py        | ~50 lines            |
+
+---
+
+# 🧠 Final Outcome
+
+After decomposition:
+
+* You can **debug each stage independently**
+* You can **separate long/short cleanly later**
+* You can **tune without breaking other parts**
+* You gain **true modular trading architecture**
+
+---
+
+# 🚀 Next Step (After This)
+
+Once decomposition is complete:
+
+👉 THEN split:
+
+* long pipeline
+* short pipeline
+
+---
+
+# 🧠 Key Insight
+
+> First make the system **clean and observable**
+> Then make it **profitable**
+
+
+Proceed phase-by-phase. Do not rush.

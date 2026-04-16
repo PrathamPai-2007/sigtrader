@@ -162,6 +162,76 @@ class GeometryQualityConfig(BaseModel):
     max_score: float = 95.0
 
 
+class MomentumExpansionConfig(BaseModel):
+    """Momentum expansion filter configuration."""
+    min_momentum_threshold: float = 0.05  # Temporarily lowered from 0.15 to 0.05
+    min_volume_surge: float = 1.1  # Temporarily lowered from 1.3 to 1.1
+
+
+class DelayedEntryConfig(BaseModel):
+    """Delayed entry confirmation configuration."""
+    min_confirmation_candles: int = 1
+    max_confirmation_candles: int = 3
+    min_price_continuation_pct: float = 0.05  # Temporarily lowered from 0.1 to 0.05
+    min_momentum_sustain: float = 0.05  # Temporarily lowered from 0.1 to 0.05
+
+
+class TrendDominanceConfig(BaseModel):
+    """Trend dominance filter configuration."""
+    min_ema_separation_pct: float = 1.5
+    min_adx_threshold: float = 25.0
+    min_di_margin: float = 5.0
+
+
+class PullbackTrapConfig(BaseModel):
+    """Pullback trap detection configuration."""
+    short_term_momentum_threshold: float = 0.02
+    higher_tf_bearish_threshold: float = -0.01
+    min_momentum_divergence: float = 0.03
+
+
+class StructureConfirmationConfig(BaseModel):
+    """Structure confirmation requirements configuration."""
+    min_volume_expansion: float = 1.5
+    higher_high_buffer_pct: float = 0.001
+    min_confirmations_required: int = 2
+
+
+class ConfidenceAdjustmentsConfig(BaseModel):
+    """LONG confidence adjustment penalties configuration."""
+    base_long_penalty: float = 0.15
+    weak_trend_penalty: float = 0.20
+    momentum_divergence_penalty: float = 0.15
+    no_confirmation_penalty: float = 0.25
+    bearish_regime_penalty: float = 0.25
+    volatile_chop_penalty: float = 0.20
+
+
+class LongEntryFiltersConfig(BaseModel):
+    """Enhanced LONG entry filters configuration."""
+    enable_enhanced_filters: bool = True
+    momentum_expansion: MomentumExpansionConfig = Field(default_factory=MomentumExpansionConfig)
+    delayed_entry: DelayedEntryConfig = Field(default_factory=DelayedEntryConfig)
+    structure_confirmation: StructureConfirmationConfig = Field(default_factory=StructureConfirmationConfig)
+    trend_dominance: TrendDominanceConfig = Field(default_factory=TrendDominanceConfig)
+    pullback_trap: PullbackTrapConfig = Field(default_factory=PullbackTrapConfig)
+    confidence_adjustments: ConfidenceAdjustmentsConfig = Field(default_factory=ConfidenceAdjustmentsConfig)
+
+
+class ExecutionSideOverride(BaseModel):
+    """Execution constraints for one trade side. All fields optional — absent
+    means fall back to the shared preset value."""
+    min_rr_ratio: float | None = None
+    min_quality: float | None = None
+    tp_rr: float | None = None
+
+
+class ExecutionOverridesConfig(BaseModel):
+    """Side-specific execution overrides. Absent keys fall back to preset."""
+    long: ExecutionSideOverride = Field(default_factory=ExecutionSideOverride)
+    short: ExecutionSideOverride = Field(default_factory=ExecutionSideOverride)
+
+
 # ── Strategy config ───────────────────────────────────────────────────────────
 
 class StrategyConfig(BaseModel):
@@ -198,6 +268,12 @@ class StrategyConfig(BaseModel):
     geometry_quality: GeometryQualityConfig = Field(default_factory=GeometryQualityConfig)
     leverage_caps: dict[str, int] = Field(default_factory=dict)
     leverage_floors: dict[str, int] = Field(default_factory=dict)
+    
+    # ── LONG Entry Filters ────────────────────────────────────────────────────
+    long_entry_filters: LongEntryFiltersConfig = Field(default_factory=LongEntryFiltersConfig)
+
+    # ── Side-specific execution overrides ────────────────────────────────────
+    execution_overrides: ExecutionOverridesConfig = Field(default_factory=ExecutionOverridesConfig)
     confidence_quality_caps: dict[str, float] = Field(
         default_factory=lambda: {"below_0_45": 54.9, "below_0_70": 74.9, "default": 95.0}
     )
@@ -422,8 +498,138 @@ class PresetConfig(BaseModel):
     min_rr_ratio: float
 
 
+class TimeframeConfig(BaseModel):
+    profile_name: str = "auto_core"
+    entry_timeframe: str = "5m"
+    trigger_timeframe: str = "15m"
+    context_timeframe: str = "1h"
+    higher_timeframe: str = "4h"
+    lookback_bars: int = 600
+
+
+class MarketModeTuning(BaseModel):
+    target_cap_atr_mult: float | None = None
+    min_confidence: float | None = None
+    max_stop_distance_pct: float | None = None
+    min_evidence_agreement: int | None = None
+    min_evidence_edge: int | None = None
+    candidate_quote_asset: str = "USDT"
+    candidate_min_quote_volume: float = 25_000_000.0
+    candidate_pool_limit: int = 40
+    candidate_kline_interval: str = "1d"
+    candidate_kline_lookback: int = 14
+    candidate_return_weight: float = 0.5
+    candidate_range_weight: float = 0.3
+    candidate_consistency_weight: float = 0.2
+
+    @field_validator("min_confidence")
+    @classmethod
+    def _unit_interval_opt(cls, v: float | None) -> float | None:
+        if v is not None and not (0.0 <= v <= 1.0):
+            raise ValueError(f"min_confidence must be in [0, 1], got {v}")
+        return v
+
+    @field_validator("max_stop_distance_pct")
+    @classmethod
+    def _positive_pct_opt(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_stop_distance_pct must be positive, got {v}")
+        return v
+
+    @field_validator("candidate_return_weight", "candidate_range_weight", "candidate_consistency_weight")
+    @classmethod
+    def _unit_weight(cls, v: float, info: object) -> float:
+        name = info.field_name if hasattr(info, "field_name") else "field"
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"{name} must be in [0, 1], got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> "MarketModeTuning":
+        total = (
+            self.candidate_return_weight
+            + self.candidate_range_weight
+            + self.candidate_consistency_weight
+        )
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"candidate weights must sum to 1.0, got {total:.6f}")
+        return self
+
+
+class StyleTuning(BaseModel):
+    fallback_risk_reward: float
+    target_cap_atr_mult: float
+    ambition_penalty_start_atr: float
+    ambition_penalty_slope: float
+    min_confidence: float
+    max_confidence: float = 1.0
+    min_quality: float
+    min_rr_ratio: float
+    max_stop_distance_pct: float
+    min_evidence_agreement: int
+    min_evidence_edge: int
+    atr_buffer_factor: float = 0.3
+
+    @field_validator("min_confidence", "max_confidence")
+    @classmethod
+    def _unit_interval(cls, v: float, info: object) -> float:
+        name = info.field_name if hasattr(info, "field_name") else "field"
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"{name} must be in [0, 1], got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_consistency(self) -> "StyleTuning":
+        if self.min_confidence > self.max_confidence:
+            raise ValueError(
+                f"min_confidence ({self.min_confidence}) > max_confidence ({self.max_confidence})"
+            )
+        if self.min_rr_ratio > self.fallback_risk_reward:
+            log.warning(
+                "config.style_tuning_inconsistency",
+                detail=(
+                    f"min_rr_ratio ({self.min_rr_ratio}) > fallback_risk_reward "
+                    f"({self.fallback_risk_reward}); may filter all setups"
+                ),
+            )
+        return self
+
+    @field_validator("min_quality")
+    @classmethod
+    def _quality_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 100.0):
+            raise ValueError(f"min_quality must be in [0, 100], got {v}")
+        return v
+
+    @field_validator("min_rr_ratio", "fallback_risk_reward")
+    @classmethod
+    def _positive_ratio(cls, v: float, info: object) -> float:
+        name = info.field_name if hasattr(info, "field_name") else "field"
+        if v <= 0:
+            raise ValueError(f"{name} must be positive, got {v}")
+        return v
+
+    @field_validator("max_stop_distance_pct")
+    @classmethod
+    def _positive_pct(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"max_stop_distance_pct must be positive, got {v}")
+        return v
+
+    @field_validator("min_evidence_agreement", "min_evidence_edge")
+    @classmethod
+    def _non_negative_int(cls, v: int, info: object) -> int:
+        name = info.field_name if hasattr(info, "field_name") else "field"
+        if v < 0:
+            raise ValueError(f"{name} must be >= 0, got {v}")
+        return v
+
+
 class AppConfig(BaseModel):
     presets: dict[str, PresetConfig]
+    market_modes: dict[str, TimeframeConfig] = Field(default_factory=dict)
+    market_mode_tuning: dict[str, MarketModeTuning] = Field(default_factory=dict)
+    styles: dict[str, StyleTuning] = Field(default_factory=dict)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     strategy: StrategyConfig
     slippage: SlippageConfig = Field(default_factory=SlippageConfig)
@@ -437,6 +643,15 @@ class AppConfig(BaseModel):
             available = ", ".join(self.presets.keys())
             raise ValueError(f"Unknown preset '{preset_name}'. Available: {available}")
         return self.presets[preset_name]
+
+    def timeframe_for(self, market_mode: "MarketMode") -> TimeframeConfig:
+        return self.market_modes[market_mode.value]
+
+    def style_tuning(self, style: "StrategyStyle") -> StyleTuning:
+        return self.styles[style.value]
+
+    def market_mode_settings(self, market_mode: "MarketMode") -> MarketModeTuning:
+        return self.market_mode_tuning[market_mode.value]
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────

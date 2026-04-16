@@ -120,6 +120,19 @@ def _resolve_risk_reward(style: StrategyStyle, risk_reward: float | None, preset
     return preset_config.fallback_risk_reward
 
 
+def _resolve_preset(preset: StrategyPreset | None, style: StrategyStyle, market_mode: MarketMode) -> tuple[StrategyStyle, MarketMode, PresetConfig | None]:
+    """Resolve preset configuration, returning style, market_mode, and preset_config.
+    
+    If preset is provided, get its configuration but keep the explicit style/market_mode.
+    If no preset, return the provided style/market_mode with None preset_config.
+    """
+    if preset is None:
+        return style, market_mode, None
+    
+    preset_config = get_preset(preset)
+    return style, market_mode, preset_config
+
+
 
 async def _analyze_async(
     symbol: str,

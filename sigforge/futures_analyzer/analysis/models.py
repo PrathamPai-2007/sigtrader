@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from dataclasses import dataclass, field as dc_field
 from datetime import UTC, datetime
 from enum import Enum
 
@@ -116,6 +117,7 @@ class TradeSetup(BaseModel):
     signal_strengths: dict[str, float] = Field(default_factory=dict)
     evidence_weighted_sum: float = 0.0
     logistic_input: float = 0.0
+    entry_type: str = "market"
 
 
 class EnhancedMetrics(BaseModel):
@@ -156,3 +158,123 @@ class AnalysisResult(BaseModel):
     enhanced_metrics: EnhancedMetrics = Field(default_factory=EnhancedMetrics)
     warnings: list[str] = Field(default_factory=list)
     disclaimer: str = "Analytical guidance only. Not financial advice and not guaranteed."
+
+
+@dataclass
+class IndicatorBundle:
+    # Per-timeframe ATR
+    entry_atr: float
+    trigger_atr: float
+    context_atr: float
+    higher_atr: float
+
+    # Trend / momentum
+    higher_trend: float        # EMA ribbon slope, normalized [-1, 1]
+    context_trend: float
+    trigger_momentum: float    # rate-of-change, normalized [-1, 1]
+    entry_momentum: float
+
+    # Volume
+    trigger_volume_surge: float   # ratio vs rolling mean, [0, ∞)
+    entry_volume_surge: float
+    cumulative_delta: float       # buy_vol - sell_vol normalized [-1, 1]
+
+    # Oscillators (entry TF)
+    rsi_14: float                 # [0, 100]
+    macd_histogram: float         # raw
+    stoch_k: float                # [0, 100]
+    bb_position: float            # [0, 1]
+    bb_bandwidth_pct: float
+
+    # Structure
+    swing_highs: list[float]      # recent confirmed swing highs
+    swing_lows: list[float]       # recent confirmed swing lows
+    market_structure: str         # "HH_HL" | "LH_LL" | "mixed"
+    liquidity_sweeps: list        # list[LiquiditySweep]
+
+    # VWAP
+    vwap: float
+    vwap_upper_1sd: float
+    vwap_lower_1sd: float
+    vwap_upper_2sd: float
+    vwap_lower_2sd: float
+
+    # Volume profile
+    poc: float
+    vah: float
+    val: float
+
+    # RSI divergence
+    rsi_divergence_type: str      # "bullish" | "bearish" | "none"
+    rsi_divergence_strength: float
+
+    # OI / funding
+    funding_rate: float | None
+    oi_change_pct: float | None
+    funding_momentum: float       # slope of recent funding history [-1, 1]
+
+    # Order book (optional)
+    order_book_imbalance: float   # [-1, 1]
+    bid_ask_spread_pct: float
+
+    # Warnings accumulated during computation
+    warnings: list[str] = dc_field(default_factory=list)
+
+
+@dataclass
+class NormalizedSignals:
+    # Each field is in [0, 1] — strength of evidence FOR that side
+    higher_trend: float
+    context_trend: float
+    trigger_momentum: float
+    entry_momentum: float
+    volume_surge: float
+    buy_pressure: float
+    oi_funding_bias: float
+    funding_momentum: float
+    structure_position: float
+    rsi_alignment: float
+    macd_alignment: float
+    bb_alignment: float
+    vwap_alignment: float
+    market_structure_align: float
+    cumulative_delta_align: float
+    volume_poc_proximity: float
+
+
+@dataclass
+class EvidenceVector:
+    weighted_sum: float
+    signal_count_above_threshold: int
+    strongest_signals: list[tuple[str, float]]  # top 3 (name, strength)
+    weakest_signals: list[tuple[str, float]]    # bottom 3
+    regime_gate_passed: bool
+    debug: dict[str, float] | None = None
+
+
+@dataclass
+class SwingPoints:
+    recent_highs: list[float]   # last N confirmed swing highs, ascending
+    recent_lows: list[float]    # last N confirmed swing lows, ascending
+    nearest_high: float
+    nearest_low: float
+    second_high: float
+    second_low: float
+
+
+@dataclass
+class EntryGeometry:
+    entry: float
+    stop: float
+    target: float
+    risk: float
+    reward: float
+    rr_ratio: float
+    stop_distance_pct: float
+    target_distance_pct: float
+    atr_multiple_to_stop: float
+    atr_multiple_to_target: float
+    stop_anchor: str    # "swing_low" | "vwap_lower" | "val" | "atr_fallback" | "rr_enforced"
+    target_anchor: str  # "swing_high" | "vwap_upper" | "vah" | "atr_cap" | "rr_enforced"
+    invalidation_strength: float
+    entry_type: str = "market"
