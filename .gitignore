@@ -1,2 +1,66 @@
-WEB_BOT.md
-PLAN.md
+# ==============================================================================
+# Sigforge - Gitignore Rules
+# ==============================================================================
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+
+# Packaging & Build Systems
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing & Quality Caches
+.pytest_cache/
+pytest-cache-files-*/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Databases & Data Storage
+.data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# IDEs & Editor Configuration
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Application Logs & Reports
+logs/
+reports/
+tmp_pdf_imgs/
+tmp/
+gpt_report.txt
+analysis_report_test.html
+find_report_test.html
+history_stats_test.md
+analyzer.config.json.backup
+
+# Tooling Caches & Local Configuration
+.antigravitycli/
+.kiro/
+plans/
